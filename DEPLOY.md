@@ -20,7 +20,7 @@ ichki taymer (JOBS_INTERVAL_SEC=600)      → avto-uzaytirish, eslatmalar, mudda
 |---|---|
 | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` |
 | `BOT_TOKEN` | @BotFather bergan token |
-| `BOT_USERNAME` | botning username'i, `@`siz |
+| `BOT_USERNAME` | `obunalar_uz_bot` |
 | `PUBLIC_URL` | `https://` + 3-qadamdagi domen |
 | `WEBHOOK_SECRET` | istalgan uzun tasodifiy satr (faqat `A-Z a-z 0-9 _ -`) |
 | `JOBS_SECRET` | boshqa tasodifiy satr |
