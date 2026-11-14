@@ -13,7 +13,14 @@ export interface BotDeps {
   defaultMonthlyPrice: number;
 }
 
-const ADMIN_RIGHTS = "invite_users+restrict_members";
+// Channels have no "ban users" toggle in Telegram's admin UI (can_restrict_members stays false even with
+// every right granted), so only the invite right is required. Removing expired members is best effort.
+const ADMIN_RIGHTS = "invite_users";
+
+/** Rights the bot must have in a channel, as the Uzbek labels the owner sees in Telegram. */
+export function missingChannelRights(m: { can_invite_users?: boolean }): string[] {
+  return m.can_invite_users ? [] : ["«Foydalanuvchilarni taklif qilish» (Add subscribers)"];
+}
 
 export function registerHandlers(bot: Bot, d: BotDeps) {
   const app = (path: string) => `${d.webAppUrl}${path}`;
@@ -49,7 +56,7 @@ export function registerHandlers(bot: Bot, d: BotDeps) {
   bot.command("panel", (ctx) => ctx.reply("Kanal egasi paneli:", { reply_markup: webAppButton("Ochish", app("/owner")) }));
   bot.command("yordam", (ctx) =>
     ctx.reply(
-      "Kanal egalari uchun: botni kanalingizga admin qiling («Foydalanuvchilarni taklif qilish» va «Bloklash» huquqlari bilan). " +
+      "Kanal egalari uchun: botni kanalingizga admin qiling («Foydalanuvchilarni taklif qilish» huquqi bilan). " +
         "Kassa avtomatik ochiladi, tariflarni paneldan sozlaysiz.\n\nObunachilar uchun: /obunam",
     ),
   );
@@ -64,7 +71,7 @@ export function registerHandlers(bot: Bot, d: BotDeps) {
       return;
     }
     const from = ctx.myChatMember.from;
-    const missing = [!m.can_invite_users && "«Foydalanuvchilarni taklif qilish»", !m.can_restrict_members && "«Bloklash»"].filter(Boolean);
+    const missing = missingChannelRights(m);
     if (missing.length) {
       await ctx.api.sendMessage(from.id, `«${chat.title}» kanalida botga ${missing.join(" va ")} huquqini bering.`).catch(() => {});
       return;

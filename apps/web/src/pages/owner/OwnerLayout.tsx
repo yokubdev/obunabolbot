@@ -24,7 +24,7 @@ export default function OwnerLayout() {
         <div className="mx-auto flex size-16 items-center justify-center rounded-2xl bg-accent-soft text-accent"><Icon name="plus" size={30} /></div>
         <h1 className="text-xl font-bold">Kanalingizni ulang</h1>
         <p className="text-sm leading-relaxed text-muted">
-          Botni kanalingizga admin qiling («Foydalanuvchilarni taklif qilish» va «Bloklash» huquqlari bilan). Shaxsiy kassangiz avtomatik ochiladi.
+          Botni kanalingizga admin qiling («Foydalanuvchilarni taklif qilish» huquqi bilan). Bot allaqachon admin bo'lsa, uni kanaldan olib tashlab qayta qo'shing. Shaxsiy kassangiz avtomatik ochiladi.
         </p>
         <Button size="lg" onClick={() => (window as any).Telegram?.WebApp?.close?.()}>Botga qaytish</Button>
       </main>
