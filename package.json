@@ -9,6 +9,7 @@
     "migrate": "pnpm --filter @obuna/core migrate",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "seed": "pnpm --filter @obuna/core seed"
   }
 }

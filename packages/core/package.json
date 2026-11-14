@@ -15,7 +15,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "migrate": "node dist/migrate-cli.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "seed": "node dist/seed-cli.js"
   },
   "dependencies": {
     "postgres": "^3.4.5"
