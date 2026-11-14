@@ -13,6 +13,7 @@ import {
   type OnModuleDestroy,
   type OnModuleInit,
 } from "@nestjs/common";
+import { timingSafeEqual } from "node:crypto";
 import { Bot, webhookCallback } from "grammy";
 import type { Request, Response } from "express";
 import type { Sql } from "@obuna/core";
@@ -27,6 +28,13 @@ import type { AppConfig } from "../config.js";
  * (JOBS_INTERVAL_SEC) and/or via POST /internal/jobs from an external cron.
  * Long polling (apps/bot) is only for local development.
  */
+/** Constant-time string comparison for shared secrets. */
+function secretMatches(given: string | undefined, expected: string): boolean {
+  if (!expected || !given) return false;
+  const a = Buffer.from(given), b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 @Controller()
 export class TelegramController implements OnModuleInit, OnApplicationBootstrap, OnModuleDestroy {
   private readonly log = new Logger("Telegram");
@@ -134,7 +142,7 @@ export class TelegramController implements OnModuleInit, OnApplicationBootstrap,
   @Post("telegram/webhook")
   async webhook(@Req() req: Request, @Res() res: Response) {
     // Checked here, before grammY's lazy getMe(), so forged requests never reach Telegram.
-    if (!this.cfg.webhookSecret || req.header("x-telegram-bot-api-secret-token") !== this.cfg.webhookSecret) {
+    if (!secretMatches(req.header("x-telegram-bot-api-secret-token"), this.cfg.webhookSecret)) {
       res.status(401).json({ error: { code: "unauthorized", message: "secret token is wrong" } });
       return;
     }
@@ -144,7 +152,7 @@ export class TelegramController implements OnModuleInit, OnApplicationBootstrap,
   @Post("internal/jobs")
   @HttpCode(200)
   async jobs(@Headers("x-jobs-secret") secret: string | undefined) {
-    if (!this.cfg.jobsSecret || secret !== this.cfg.jobsSecret) throw new ForbiddenException();
+    if (!secretMatches(secret, this.cfg.jobsSecret)) throw new ForbiddenException();
     return this.runJobs();
   }
 }

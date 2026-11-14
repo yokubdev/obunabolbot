@@ -7,8 +7,9 @@ const fmtDate = (d: Date) =>
 export const webAppButton = (text: string, url: string) => new InlineKeyboard().webApp(text, url);
 
 /**
- * Sends the subscriber a one-time invite link (member_limit = 1, valid 24h).
- * The user is unbanned first in case an earlier subscription ended with a ban.
+ * Sends the subscriber a personal invite link that creates a join request (valid 24h).
+ * The bot approves the request only for a user with an active subscription, so a forwarded
+ * link is useless to anyone else. The user is unbanned first in case an earlier subscription ended with a ban.
  */
 export async function grantAccess(
   api: Api,
@@ -16,7 +17,7 @@ export async function grantAccess(
 ): Promise<void> {
   await api.unbanChatMember(a.tgChatId, a.tgUserId, { only_if_banned: true }).catch(() => {});
   const link = await api.createChatInviteLink(a.tgChatId, {
-    member_limit: 1,
+    creates_join_request: true,
     expire_date: Math.floor(Date.now() / 1000) + 24 * 3600,
     name: `obuna-${a.tgUserId}`.slice(0, 32),
   });
@@ -24,7 +25,7 @@ export async function grantAccess(
     a.tgUserId,
     `✅ To'lov qabul qilindi: ${formatSom(a.amount)}\n\n` +
       `«${a.channelTitle}» obunasi ${fmtDate(a.expiresAt)} gacha faol.\n` +
-      `Havola faqat siz uchun va bir marta ishlaydi.`,
+      `Havolani bosing va «Qo'shilish so'rovi»ni yuboring: bot uni darhol tasdiqlaydi. Havola faqat siz uchun ishlaydi.`,
     { reply_markup: new InlineKeyboard().url("Kanalga kirish", link.invite_link) },
   );
 }

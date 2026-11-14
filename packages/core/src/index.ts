@@ -9,3 +9,4 @@ export * from "./payments.js";
 export * from "./wallet.js";
 export * from "./subscriptions.js";
 export * from "./stats.js";
+export * from "./cardvault.js";

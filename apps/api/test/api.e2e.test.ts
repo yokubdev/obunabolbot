@@ -65,7 +65,7 @@ d("API end to end (mock ATMOS, fake Telegram)", () => {
       .send({ otp: "111111" }).expect(201);
     expect(ok.body.status).toBe("paid");
     expect(ok.body.autoRenew).toBe(true);
-    expect(tg.createChatInviteLink).toHaveBeenCalledWith(-1001, expect.objectContaining({ member_limit: 1 }));
+    expect(tg.createChatInviteLink).toHaveBeenCalledWith(-1001, expect.objectContaining({ creates_join_request: true }));
     expect(tg.sendMessage).toHaveBeenCalledWith(111, expect.stringContaining("44 100 so'm"));
 
     // Someone else cannot confirm or see this payment.
@@ -89,10 +89,14 @@ d("API end to end (mock ATMOS, fake Telegram)", () => {
     await http.get("/api/platform/withdrawals").set("Authorization", as(111)).expect(403);
     const pending = await http.get("/api/platform/withdrawals").set("Authorization", as(999)).expect(200);
     expect(pending.body).toHaveLength(1);
+    // Only the platform operator sees the full card; the owner never gets the encrypted blob.
+    expect(pending.body[0].card_number).toBe("9860123456784417");
+    expect(pending.body[0].card_enc).toBeUndefined();
     await http.post(`/api/platform/withdrawals/${w.body.id}/paid`).set("Authorization", as(999)).expect(201);
     const wallet = await http.get("/api/owner/wallet").set("Authorization", as(111)).expect(200);
     expect(wallet.body.available).toBe(410_000);
     expect(wallet.body.withdrawals[0].status).toBe("paid");
+    expect(JSON.stringify(wallet.body)).not.toMatch(/card_enc|9860123456784417/);
   });
 
   it("lets an owner manage plans but not another owner's", async () => {
@@ -114,5 +118,39 @@ d("API end to end (mock ATMOS, fake Telegram)", () => {
     expect(r.body).toMatchObject({ renewed: 0, renewFailed: 0 });
     await http.post("/telegram/webhook").send({ update_id: 1 }).expect(401);
     await http.post("/telegram/webhook").set("X-Telegram-Bot-Api-Secret-Token", "nope").send({ update_id: 1 }).expect(401);
+  });
+
+  it("charges once when the SMS code is confirmed twice at the same time", async () => {
+    const http = request(app.getHttpServer());
+    const page = await http.get("/api/channels/fitness-akademiya").expect(200);
+    const start = await http.post("/api/checkout").set("Authorization", as(555))
+      .send({ planId: page.body.plans[0].id, autoRenew: false, cardNumber: "8600123456784417", expiry: "09/28" }).expect(201);
+    const before = tg.sendMessage.mock.calls.length;
+    const res = await Promise.all([1, 2].map(() =>
+      http.post(`/api/checkout/${start.body.paymentId}/confirm`).set("Authorization", as(555)).send({ otp: "111111" })));
+    expect(res.map((r) => r.status).sort()).toEqual([201, 409]);
+    const [{ n }] = await sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM ledger_entries WHERE payment_id = ${start.body.paymentId} AND type = 'payment'`;
+    expect(n).toBe(1);
+    expect(tg.sendMessage.mock.calls.length - before).toBe(2); // one invite, one owner sale note
+  });
+
+  it("cancels a payment after too many wrong SMS codes and limits new payments", async () => {
+    const http = request(app.getHttpServer());
+    const page = await http.get("/api/channels/fitness-akademiya").expect(200);
+    const body = { planId: page.body.plans[0].id, autoRenew: false, cardNumber: "8600123456784417", expiry: "09/28" };
+    const start = await http.post("/api/checkout").set("Authorization", as(666)).send(body).expect(201);
+    for (let i = 0; i < 5; i++)
+      await http.post(`/api/checkout/${start.body.paymentId}/confirm`).set("Authorization", as(666)).send({ otp: "000000" }).expect(402);
+    await http.post(`/api/checkout/${start.body.paymentId}/confirm`).set("Authorization", as(666)).send({ otp: "111111" }).expect(400);
+    for (let i = 0; i < 4; i++) await http.post("/api/checkout").set("Authorization", as(666)).send(body).expect(201);
+    await http.post("/api/checkout").set("Authorization", as(666)).send(body).expect(429);
+  });
+
+  it("rejects stale and future-dated Telegram signatures", async () => {
+    const http = request(app.getHttpServer());
+    const now = Math.floor(Date.now() / 1000);
+    await http.get("/api/me").set("Authorization", `tma ${signInitData({ id: 1, first_name: "x" }, BOT, now - 2 * 86400)}`).expect(401);
+    await http.get("/api/me").set("Authorization", `tma ${signInitData({ id: 1, first_name: "x" }, BOT, now + 3600)}`).expect(401);
+    await http.get("/api/me").set("Authorization", `tma ${signInitData({ id: 1, first_name: "x" }, "999:OTHER")}`).expect(401);
   });
 });

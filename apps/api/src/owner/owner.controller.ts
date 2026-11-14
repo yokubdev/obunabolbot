@@ -3,23 +3,31 @@ import { z } from "zod";
 import {
   createPlan, getOwnedChannel, getOwnerStats, getWallet, listLedger, listOwnerChannels, listOwnerSubscribers,
   listPlans, listWithdrawals, requestWithdrawal, updateChannel, updatePlan, type Owner, type OwnerSubFilter, type Sql,
+  type Withdrawal,
 } from "@obuna/core";
 import { CurrentOwner, OwnerGuard, TelegramAuthGuard } from "../common/auth.js";
 import { CONFIG, SQL } from "../tokens.js";
 import type { AppConfig } from "../config.js";
 
 const PlanBody = z.object({
-  title: z.string().min(1).max(40),
+  title: z.string().trim().min(1).max(40),
   durationDays: z.number().int().min(1).max(3660),
-  price: z.number().int().positive(), // tiyin
+  price: z.number().int().positive().max(10_000_000_000), // tiyin
 });
 const PlanPatch = z.object({
-  title: z.string().min(1).max(40).optional(),
-  price: z.number().int().positive().optional(),
+  title: z.string().trim().min(1).max(40).optional(),
+  price: z.number().int().positive().max(10_000_000_000).optional(),
   isActive: z.boolean().optional(),
 });
 const ChannelPatch = z.object({ description: z.string().max(500).optional(), slug: z.string().optional() });
-const WithdrawBody = z.object({ amount: z.number().int().positive(), cardNumber: z.string() });
+const WithdrawBody = z.object({ amount: z.number().int().positive(), cardNumber: z.string().max(32) });
+const ChannelPatchStrict = ChannelPatch.strict();
+
+/** What an owner may see of a payout: never the encrypted card blob. */
+const publicWithdrawal = (w: Withdrawal) => ({
+  id: w.id, amount: w.amount, status: w.status, note: w.note, created_at: w.created_at, processed_at: w.processed_at,
+  card_number: `•••• ${w.card_number.slice(-4)}`,
+});
 
 /** The channel owner's panel: channels, plans, subscribers, revenue and the virtual cashbox. */
 @Controller("api/owner")
@@ -72,7 +80,7 @@ export class OwnerController {
 
   @Patch("channels/:id")
   patchChannel(@CurrentOwner() owner: Owner, @Param("id", ParseIntPipe) id: number, @Body() body: unknown) {
-    return updateChannel(this.sql, owner.id, id, ChannelPatch.parse(body));
+    return updateChannel(this.sql, owner.id, id, ChannelPatchStrict.parse(body));
   }
 
   @Get("wallet")
@@ -85,14 +93,13 @@ export class OwnerController {
     return {
       ...summary,
       ledger,
-      withdrawals: withdrawals.map((w) => ({ ...w, card_number: `•••• ${w.card_number.slice(-4)}` })),
+      withdrawals: withdrawals.map(publicWithdrawal),
     };
   }
 
   @Post("withdrawals")
   async withdraw(@CurrentOwner() owner: Owner, @Body() body: unknown) {
     const b = WithdrawBody.parse(body);
-    const w = await requestWithdrawal(this.sql, owner.id, b.amount, b.cardNumber);
-    return { ...w, card_number: `•••• ${w.card_number.slice(-4)}` };
+    return publicWithdrawal(await requestWithdrawal(this.sql, owner.id, b.amount, b.cardNumber, this.cfg.cardKey));
   }
 }

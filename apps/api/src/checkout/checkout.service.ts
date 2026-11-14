@@ -1,8 +1,8 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import type { Api } from "grammy";
 import {
-  AppError, commissionFor, confirmPayment, createPayment, getPayment, getPlan, markPaymentFailed,
-  markPaymentPendingOtp, sessionIdOf, upsertSubscriber, type Sql, type TgUser,
+  AppError, assertCheckoutRate, claimPaymentForConfirm, commissionFor, confirmPayment, createPayment, getPayment, getPlan,
+  markPaymentFailed, markPaymentPendingOtp, releasePaymentClaim, sessionIdOf, upsertSubscriber, type Sql, type TgUser,
 } from "@obuna/core";
 import { ProviderError, type CardPaymentProvider } from "@obuna/atmos";
 import { grantAccess, notifyOwnerSale, notifyRenewed } from "@obuna/telegram";
@@ -23,6 +23,7 @@ export class CheckoutService {
   /** Step 1: create the payment and send an SMS code to the card owner. */
   async start(user: TgUser, a: { planId: number; autoRenew: boolean; cardNumber: string; expiry: string }) {
     const subscriber = await upsertSubscriber(this.sql, user);
+    await assertCheckoutRate(this.sql, subscriber.id);
     const { payment } = await createPayment(this.sql, {
       subscriberId: subscriber.id, planId: a.planId, provider: this.provider.name, autoRenew: a.autoRenew,
     });
@@ -40,24 +41,33 @@ export class CheckoutService {
 
   /** Step 2: check the SMS code, charge, credit the owner's cashbox and send the invite link. */
   async confirm(user: TgUser, paymentId: number, otp: string) {
-    const payment = await getPayment(this.sql, paymentId);
     const subscriber = await upsertSubscriber(this.sql, user);
-    if (payment.subscriber_id !== subscriber.id) throw new AppError("not_found", "To'lov topilmadi", 404);
-    if (payment.status === "paid") return this.fulfilled(paymentId);
-    const sessionId = sessionIdOf(payment);
-    if (payment.status !== "pending_otp" || !sessionId) throw new AppError("bad_state", "To'lovni qaytadan boshlang");
+    const claimed = await claimPaymentForConfirm(this.sql, paymentId, subscriber.id);
+    if (!claimed) {
+      const p = await getPayment(this.sql, paymentId).catch(() => null);
+      if (!p || p.subscriber_id !== subscriber.id) throw new AppError("not_found", "To'lov topilmadi", 404);
+      if (p.status === "paid") return this.fulfilled(paymentId);
+      if (p.status === "confirming") throw new AppError("in_progress", "To'lov tekshirilmoqda, biroz kuting", 409);
+      throw new AppError("bad_state", "To'lovni qaytadan boshlang");
+    }
+    const sessionId = sessionIdOf(claimed);
+    if (!sessionId) {
+      await markPaymentFailed(this.sql, paymentId, "no provider session");
+      throw new AppError("bad_state", "To'lovni qaytadan boshlang");
+    }
 
     let charged: { providerTxId: string; cardToken: string };
     try {
-      charged = await this.provider.confirmCardPayment({ paymentId, amount: payment.amount, sessionId, otp });
+      charged = await this.provider.confirmCardPayment({ paymentId, amount: claimed.amount, sessionId, otp });
     } catch (e) {
-      // A wrong code can be retried; anything else ends this payment.
-      if (!(e instanceof ProviderError && e.code === "bad_otp")) await markPaymentFailed(this.sql, paymentId, (e as Error).message);
+      // A wrong code can be retried a few times; anything else ends this payment.
+      if (e instanceof ProviderError && e.code === "bad_otp") await releasePaymentClaim(this.sql, paymentId);
+      else await markPaymentFailed(this.sql, paymentId, (e as Error).message);
       throw e;
     }
     const result = await confirmPayment(
       this.sql, paymentId, { commissionBps: this.cfg.commissionBps, holdHours: this.cfg.holdHours },
-      { providerTxId: charged.providerTxId, cardToken: payment.auto_renew ? charged.cardToken : null },
+      { providerTxId: charged.providerTxId, cardToken: claimed.auto_renew ? charged.cardToken : null },
     );
     if (!result.alreadyPaid) await this.notify(result, user);
     return this.fulfilled(paymentId);

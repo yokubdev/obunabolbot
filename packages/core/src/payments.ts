@@ -38,21 +38,85 @@ export async function markPaymentPendingOtp(sql: Sql, id: number, sessionId: str
             WHERE id = ${id} AND status IN ('created', 'pending_otp')`;
 }
 
+/** Card payments a subscriber may start per 10 minutes: every start sends an SMS to the card holder. */
+export const MAX_CHECKOUTS_PER_10_MIN = 5;
+/** Wrong SMS codes allowed before the payment is cancelled. */
+export const MAX_OTP_ATTEMPTS = 5;
+
+export async function assertCheckoutRate(sql: Sql, subscriberId: number): Promise<void> {
+  const { n } = (await sql<{ n: number }[]>`
+    SELECT COUNT(*)::int AS n FROM payments
+    WHERE subscriber_id = ${subscriberId} AND created_at > now() - interval '10 minutes'`)[0]!;
+  if (n >= MAX_CHECKOUTS_PER_10_MIN)
+    throw new AppError("rate_limited", "Juda ko'p urinish. 10 daqiqadan keyin qayta urinib ko'ring", 429);
+}
+
+/**
+ * Claims a payment for confirmation: pending_otp → confirming, counting the attempt.
+ * Only one request can hold the claim, so the provider is never asked to charge twice.
+ * Returns null when the payment is not claimable (already paid, in progress, failed, or out of attempts).
+ */
+export async function claimPaymentForConfirm(sql: Sql, id: number, subscriberId: number): Promise<Payment | null> {
+  const [row] = await sql<Payment[]>`
+    UPDATE payments SET status = 'confirming', otp_attempts = otp_attempts + 1
+    WHERE id = ${id} AND subscriber_id = ${subscriberId} AND status = 'pending_otp' AND otp_attempts < ${MAX_OTP_ATTEMPTS}
+    RETURNING *`;
+  return row ?? null;
+}
+
+/** Wrong SMS code: give the claim back so the subscriber can try again (until attempts run out). */
+export async function releasePaymentClaim(sql: Sql, id: number): Promise<void> {
+  await sql`
+    UPDATE payments SET status = CASE WHEN otp_attempts >= ${MAX_OTP_ATTEMPTS} THEN 'failed' ELSE 'pending_otp' END,
+      error = CASE WHEN otp_attempts >= ${MAX_OTP_ATTEMPTS} THEN 'too many wrong codes' ELSE error END
+    WHERE id = ${id} AND status = 'confirming'`;
+}
+
 export function sessionIdOf(p: Payment): string | null {
   const m = p.provider_tx_id?.match(/^session:\d+:(.+)$/);
   return m ? m[1]! : null;
 }
 
-export interface RenewalRow { subscription_id: number; subscriber_id: number; plan_id: number; card_token: string; subscriber_tg_id: number }
+export interface RenewalRow {
+  subscription_id: number;
+  subscriber_id: number;
+  plan_id: number;
+  card_token: string;
+  subscriber_tg_id: number;
+  channel_title: string;
+  channel_slug: string;
+  /** The plan's current price and state, and what the subscriber last paid for it. */
+  plan_price: number;
+  plan_active: boolean;
+  last_amount: number | null;
+}
 
-/** Active auto-renew subscriptions ending within 24h that have no renewal attempt today. */
-export const listDueRenewals = (sql: Sql) => sql<RenewalRow[]>`
-  SELECT s.id AS subscription_id, s.subscriber_id, s.plan_id, s.card_token, sb.tg_id AS subscriber_tg_id
-  FROM subscriptions s JOIN subscribers sb ON sb.id = s.subscriber_id
-  WHERE s.status = 'active' AND s.auto_renew AND s.card_token IS NOT NULL
-    AND s.expires_at < now() + interval '1 day'
-    AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.subscriber_id = s.subscriber_id AND p.channel_id = s.channel_id
-                    AND p.created_at > now() - interval '20 hours')`;
+/**
+ * Claims the auto-renew subscriptions ending within 24h that had no renewal attempt in the last 20h.
+ * The claim (renew_attempted_at) is taken in the same statement, so overlapping job runs
+ * (in-process timer plus an external cron) can never both charge the same card.
+ */
+export const claimDueRenewals = (sql: Sql) => sql<RenewalRow[]>`
+  WITH due AS (
+    UPDATE subscriptions s SET renew_attempted_at = now()
+    WHERE s.status = 'active' AND s.auto_renew AND s.card_token IS NOT NULL
+      AND s.expires_at < now() + interval '1 day'
+      AND (s.renew_attempted_at IS NULL OR s.renew_attempted_at < now() - interval '20 hours')
+    RETURNING s.*
+  )
+  SELECT d.id AS subscription_id, d.subscriber_id, d.plan_id, d.card_token, sb.tg_id AS subscriber_tg_id,
+         c.title AS channel_title, c.slug AS channel_slug, pl.price AS plan_price, pl.is_active AS plan_active,
+         (SELECT p.amount FROM payments p WHERE p.subscriber_id = d.subscriber_id AND p.channel_id = d.channel_id
+            AND p.status = 'paid' ORDER BY p.paid_at DESC LIMIT 1) AS last_amount
+  FROM due d
+  JOIN subscribers sb ON sb.id = d.subscriber_id
+  JOIN channels c ON c.id = d.channel_id
+  JOIN plans pl ON pl.id = d.plan_id`;
+
+/** Stops auto-renew (price changed, plan withdrawn, card declined): the subscriber renews by hand. */
+export async function stopAutoRenew(sql: Sql, subscriptionId: number): Promise<void> {
+  await sql`UPDATE subscriptions SET auto_renew = false WHERE id = ${subscriptionId}`;
+}
 
 export async function markPaymentFailed(sql: Sql, id: number, error: string): Promise<void> {
   await sql`UPDATE payments SET status = 'failed', error = ${error} WHERE id = ${id} AND status <> 'paid'`;
@@ -91,6 +155,8 @@ export async function confirmPayment(
       return { payment, subscription: sub!, channel: channel!, alreadyPaid: true, wasActive: true };
     }
     if (payment.status === "failed") throw new AppError("payment_failed", "To'lov bekor qilingan");
+    // Never book money for a payment that the provider has not been asked to charge.
+    if (payment.status === "pending_otp") throw new AppError("bad_state", "To'lov tasdiqlanmagan");
 
     const [paid] = await tx<Payment[]>`
       UPDATE payments SET status = 'paid', paid_at = now(),

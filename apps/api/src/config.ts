@@ -1,3 +1,5 @@
+import { parseCardKey } from "@obuna/core";
+
 export interface AppConfig {
   databaseUrl: string;
   botToken: string;
@@ -17,6 +19,8 @@ export interface AppConfig {
   jobsIntervalSec: number;
   /** Built Mini App + panel (apps/web/dist) to serve from the same origin; empty = API only. */
   webDist: string;
+  /** AES-256 key for payout card numbers (CARD_ENC_KEY, 32 bytes base64). */
+  cardKey: Buffer;
   atmos: { mock: boolean; baseUrl: string; consumerKey: string; consumerSecret: string; storeId: string };
 }
 
@@ -26,7 +30,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     if (!v) throw new Error(`${k} is not set (see .env.example)`);
     return v;
   };
+  const production = env.NODE_ENV === "production";
+  if (production && env.DEV_AUTH === "true") throw new Error("DEV_AUTH=true is not allowed in production");
+  if (production && !env.CARD_ENC_KEY) throw new Error("CARD_ENC_KEY is not set (openssl rand -base64 32)");
+  if (production && (!env.WEBHOOK_SECRET || !env.JOBS_SECRET)) throw new Error("WEBHOOK_SECRET and JOBS_SECRET are required");
   return {
+    // Development only: a fixed all-zero key, so local withdrawals work without setup.
+    cardKey: env.CARD_ENC_KEY ? parseCardKey(env.CARD_ENC_KEY) : Buffer.alloc(32),
     databaseUrl: need("DATABASE_URL"),
     botToken: need("BOT_TOKEN"),
     botUsername: env.BOT_USERNAME ?? "obuna_bot",

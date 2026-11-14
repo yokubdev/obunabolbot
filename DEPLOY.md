@@ -24,6 +24,7 @@ ichki taymer (JOBS_INTERVAL_SEC=600)      → avto-uzaytirish, eslatmalar, mudda
 | `PUBLIC_URL` | `https://` + 3-qadamdagi domen |
 | `WEBHOOK_SECRET` | istalgan uzun tasodifiy satr (faqat `A-Z a-z 0-9 _ -`) |
 | `JOBS_SECRET` | boshqa tasodifiy satr |
+| `CARD_ENC_KEY` | `openssl rand -base64 32` (pul yechish kartalarini shifrlash kaliti; yo'qolsa, kutilayotgan so'rovlar kartasini o'qib bo'lmaydi) |
 | `PLATFORM_ADMIN_IDS` | Telegram ID'ingiz |
 | `DEV_AUTH` | `false` |
 | `ATMOS_MOCK` | `true` (sandbox kalitlari kelguncha) |

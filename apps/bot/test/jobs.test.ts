@@ -50,4 +50,22 @@ d("scheduler", () => {
     expect(api.banChatMember).toHaveBeenCalledWith(-100, 20);
     expect(api.banChatMember).not.toHaveBeenCalledWith(-100, 10);
   });
+
+  it("never auto-renews at a changed price", async () => {
+    const owner = await upsertOwner(sql, { id: 2, first_name: "Owner2" });
+    const ch = await registerChannel(sql, owner.id, { id: -200, title: "Kanal 2" });
+    const plan = await createPlan(sql, owner.id, ch.id, { title: "1 oy", duration_days: 30, price: 1_000_000 });
+    const s = await upsertSubscriber(sql, { id: 30, first_name: "Auto2" });
+    const { payment } = await createPayment(sql, { subscriberId: s.id, planId: plan.id, provider: "mock", autoRenew: true });
+    await confirmPayment(sql, payment.id, ledger, { cardToken: "tok" });
+    await sql`UPDATE subscriptions SET expires_at = now() + interval '12 hours' WHERE subscriber_id = ${s.id}`;
+    await sql`UPDATE plans SET price = 2_000_000 WHERE id = ${plan.id}`;
+    const before = (await getWallet(sql, owner.id)).available;
+    const r = await runJobs({ sql, api: api as unknown as Api, provider: new MockProvider(), ledger, webAppUrl: "https://app" });
+    expect(r.renewed).toBe(0);
+    expect((await getWallet(sql, owner.id)).available).toBe(before);
+    const [sub] = await sql`SELECT auto_renew FROM subscriptions WHERE subscriber_id = ${s.id}`;
+    expect(sub!.auto_renew).toBe(false);
+    expect(api.sendMessage).toHaveBeenCalledWith(30, expect.stringContaining("narx"), expect.anything());
+  });
 });

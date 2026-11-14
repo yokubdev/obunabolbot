@@ -21,6 +21,9 @@ export class ErrorsFilter implements ExceptionFilter {
       code = `http_${status}`;
       const r = err.getResponse();
       message = typeof r === "string" ? r : ((r as { message?: string }).message ?? err.message);
+    } else if ((err as { code?: string })?.code === "23505") {
+      // Postgres unique violation: a concurrent duplicate, not a server bug.
+      [status, code, message] = [409, "conflict", "Bu ma'lumot allaqachon mavjud"];
     } else this.log.error(err);
     res.status(status).json({ error: { code, message } });
   }

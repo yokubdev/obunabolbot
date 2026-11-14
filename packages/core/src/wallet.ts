@@ -1,6 +1,7 @@
 import type { Sql } from "./db.js";
 import { AppError, notFound } from "./errors.js";
 import type { Withdrawal } from "./types.js";
+import { encryptCard } from "./cardvault.js";
 
 export interface WalletSummary {
   /** Withdrawable now (tiyin). */
@@ -45,13 +46,15 @@ export const listLedger = (sql: Sql, ownerId: number, limit = 50) => sql<LedgerR
   ORDER BY l.id DESC LIMIT ${limit}`;
 
 export function normalizeCard(card: string): string {
-  const digits = card.replace(/\D/g, "");
-  if (!/^(8600|9860|5614|4|5)\d+$/.test(digits) || digits.length !== 16)
+  const digits = card.replace(/[\s-]/g, "");
+  if (!/^\d{16}$/.test(digits) || !/^(8600|9860|5614|4|5)/.test(digits))
     throw new AppError("bad_card", "Karta raqami 16 xonali Uzcard yoki Humo bo'lishi kerak");
   return digits;
 }
 
 export const MIN_WITHDRAWAL = 1_000_000; // 10 000 so'm
+/** At most this many payout requests per owner per day (limits damage from a hijacked account). */
+export const MAX_WITHDRAWALS_PER_DAY = 5;
 
 /**
  * Takes money out of the cashbox immediately (a negative ledger entry) and queues a payout.
@@ -62,6 +65,7 @@ export async function requestWithdrawal(
   ownerId: number,
   amount: number,
   card: string,
+  cardKey: Buffer,
 ): Promise<Withdrawal> {
   if (!Number.isInteger(amount) || amount < MIN_WITHDRAWAL)
     throw new AppError("bad_amount", "Eng kam yechish summasi 10 000 so'm");
@@ -72,9 +76,13 @@ export async function requestWithdrawal(
       SELECT COALESCE(SUM(amount), 0)::bigint AS available
       FROM ledger_entries WHERE owner_id = ${ownerId} AND available_at <= now()`)[0]!;
     if (amount > available) throw new AppError("insufficient", "Kassada yetarli mablag' yo'q");
+    const { today } = (await tx<{ today: number }[]>`
+      SELECT COUNT(*)::int AS today FROM withdrawals WHERE owner_id = ${ownerId} AND created_at > now() - interval '1 day'`)[0]!;
+    if (today >= MAX_WITHDRAWALS_PER_DAY)
+      throw new AppError("too_many", "Bir kunda ko'pi bilan 5 ta yechish so'rovi", 429);
     const [w] = await tx<Withdrawal[]>`
-      INSERT INTO withdrawals (owner_id, amount, card_number, status)
-      VALUES (${ownerId}, ${amount}, ${cardNumber}, 'pending') RETURNING *`;
+      INSERT INTO withdrawals (owner_id, amount, card_number, card_enc, status)
+      VALUES (${ownerId}, ${amount}, ${cardNumber.slice(-4)}, ${encryptCard(cardNumber, cardKey)}, 'pending') RETURNING *`;
     await tx`
       INSERT INTO ledger_entries (owner_id, amount, type, withdrawal_id)
       VALUES (${ownerId}, ${-amount}, 'withdrawal', ${w!.id})`;
@@ -85,6 +93,7 @@ export async function requestWithdrawal(
 export const listWithdrawals = (sql: Sql, ownerId: number) =>
   sql<Withdrawal[]>`SELECT * FROM withdrawals WHERE owner_id = ${ownerId} ORDER BY id DESC LIMIT 50`;
 
+/** Includes card_enc: only the platform admin endpoint may read it, and it decrypts there. */
 export const listPendingWithdrawals = (sql: Sql) => sql<(Withdrawal & { owner_name: string; owner_tg_id: number })[]>`
   SELECT w.*, o.name AS owner_name, o.tg_id AS owner_tg_id
   FROM withdrawals w JOIN owners o ON o.id = w.owner_id

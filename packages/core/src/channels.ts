@@ -68,6 +68,12 @@ export async function updateChannel(
   await getOwnedChannel(sql, ownerId, channelId);
   if (patch.slug !== undefined && !/^[a-z0-9-]{3,32}$/.test(patch.slug))
     throw new AppError("bad_slug", "Havola nomi 3–32 ta lotin harf, raqam yoki '-' bo'lishi kerak");
+  if (patch.slug !== undefined && RESERVED_SLUGS.has(patch.slug))
+    throw new AppError("bad_slug", "Bu havola nomi band");
+  if (patch.slug !== undefined) {
+    const [taken] = await sql`SELECT 1 FROM channels WHERE slug = ${patch.slug} AND id <> ${channelId}`;
+    if (taken) throw new AppError("slug_taken", "Bu havola nomi band", 409);
+  }
   const [row] = await sql<Channel[]>`
     UPDATE channels SET
       description = COALESCE(${patch.description ?? null}, description),
@@ -87,11 +93,17 @@ export async function getPlan(sql: Sql, id: number): Promise<Plan> {
   return row;
 }
 
+/** 100 000 000 so'm: far above any real plan, far below Number.MAX_SAFE_INTEGER. */
+export const MAX_PLAN_PRICE = 10_000_000_000;
+/** Paths of the app itself; a channel link may not shadow them. */
+const RESERVED_SLUGS = new Set(["api", "my", "owner", "platform", "admin", "telegram", "internal", "healthz", "assets", "c"]);
+
 function validatePlan(p: { title: string; duration_days: number; price: number }) {
   if (!p.title.trim()) throw new AppError("bad_plan", "Tarif nomi bo'sh");
   if (!Number.isInteger(p.duration_days) || p.duration_days < 1 || p.duration_days > 3660)
     throw new AppError("bad_plan", "Muddat 1–3660 kun bo'lishi kerak");
   if (!Number.isInteger(p.price) || p.price < 100_000) throw new AppError("bad_plan", "Narx kamida 1 000 so'm");
+  if (p.price > MAX_PLAN_PRICE) throw new AppError("bad_plan", "Narx ko'pi bilan 100 000 000 so'm");
 }
 
 export async function createPlan(

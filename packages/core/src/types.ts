@@ -23,11 +23,11 @@ export interface Subscription {
 export interface Payment {
   id: number; subscriber_id: number; channel_id: number; plan_id: number; amount: number;
   provider: string; provider_tx_id: string | null;
-  status: "created" | "pending_otp" | "paid" | "failed"; auto_renew: boolean;
+  status: "created" | "pending_otp" | "confirming" | "paid" | "failed"; auto_renew: boolean; otp_attempts: number;
   error: string | null; created_at: Date; paid_at: Date | null;
 }
 export interface Withdrawal {
-  id: number; owner_id: number; amount: number; card_number: string;
+  id: number; owner_id: number; amount: number; /** Last 4 digits only. */ card_number: string; card_enc: string | null;
   status: "pending" | "paid" | "rejected"; note: string | null; created_at: Date; processed_at: Date | null;
 }
 

@@ -71,6 +71,15 @@ export function registerHandlers(bot: Bot, d: BotDeps) {
       return;
     }
     const from = ctx.myChatMember.from;
+    // Only the channel's creator may connect it: otherwise any admin could sell access to
+    // someone else's channel and collect the money into their own cashbox.
+    const promoter = await ctx.api.getChatMember(chat.id, from.id).catch(() => null);
+    if (promoter?.status !== "creator") {
+      await ctx.api
+        .sendMessage(from.id, `«${chat.title}» kanalini faqat kanal egasi (yaratuvchisi) ulay oladi. Botni egasi admin qilsin.`)
+        .catch(() => {});
+      return;
+    }
     const missing = missingChannelRights(m);
     if (missing.length) {
       await ctx.api.sendMessage(from.id, `«${chat.title}» kanalida botga ${missing.join(" va ")} huquqini bering.`).catch(() => {});

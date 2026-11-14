@@ -10,15 +10,18 @@ export function validateInitData(initData: string, botToken: string, maxAgeSec =
   const hash = params.get("hash");
   if (!hash) return null;
   params.delete("hash");
+  // Byte-order sort, as Telegram specifies (localeCompare can order "_" differently).
   const checkString = [...params.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([k, v]) => `${k}=${v}`)
     .join("\n");
   const secret = createHmac("sha256", "WebAppData").update(botToken).digest();
   const expected = createHmac("sha256", secret).update(checkString).digest("hex");
   if (expected.length !== hash.length || !timingSafeEqual(Buffer.from(expected), Buffer.from(hash))) return null;
   const authDate = Number(params.get("auth_date"));
-  if (!authDate || Date.now() / 1000 - authDate > maxAgeSec) return null;
+  const age = Date.now() / 1000 - authDate;
+  // Too old (replayed), or dated in the future beyond clock skew.
+  if (!authDate || age > maxAgeSec || age < -300) return null;
   try {
     const user = JSON.parse(params.get("user") ?? "null") as TgUser | null;
     return user && typeof user.id === "number" ? user : null;
