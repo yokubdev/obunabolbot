@@ -1,0 +1,57 @@
+# Production: one server, one domain.
+#   cp .env.example .env   (fill it in, set DOMAIN and DEV_AUTH=false)
+#   docker compose -f docker-compose.prod.yml up -d --build
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: obuna
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: obuna
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U obuna"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: { context: ., target: api }
+    image: obuna-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://obuna:${POSTGRES_PASSWORD}@db:5432/obuna
+      WEBAPP_URL: https://${DOMAIN}
+    depends_on:
+      db: { condition: service_healthy }
+
+  bot:
+    build: { context: ., target: bot }
+    image: obuna-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://obuna:${POSTGRES_PASSWORD}@db:5432/obuna
+      WEBAPP_URL: https://${DOMAIN}
+    depends_on:
+      db: { condition: service_healthy }
+      api: { condition: service_started }
+
+  web:
+    build: { context: ., target: web }
+    image: obuna-web
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+    depends_on: [api]
+
+volumes:
+  pgdata:
+  caddy_data:

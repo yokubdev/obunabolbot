@@ -1,5 +1,6 @@
 import { tg } from "./telegram";
 
+// Empty in production: the API is served from the same domain under /api.
 const BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3000";
 
 /** Outside Telegram (local dev) the API accepts ?dev=<telegram id>, remembered in localStorage. */

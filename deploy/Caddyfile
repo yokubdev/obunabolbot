@@ -1,0 +1,12 @@
+# Caddy gets a Let's Encrypt certificate for $DOMAIN automatically (Telegram Mini Apps require HTTPS).
+{$DOMAIN:localhost} {
+	encode gzip
+	handle /api/* {
+		reverse_proxy api:3000
+	}
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}
