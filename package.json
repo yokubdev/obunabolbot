@@ -1,0 +1,14 @@
+{
+  "name": "obuna",
+  "private": true,
+  "packageManager": "pnpm@10.28.0",
+  "scripts": {
+    "dev:api": "pnpm --filter @obuna/api dev",
+    "dev:bot": "pnpm --filter @obuna/bot dev",
+    "dev:web": "pnpm --filter @obuna/web dev",
+    "migrate": "pnpm --filter @obuna/core migrate",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test"
+  }
+}

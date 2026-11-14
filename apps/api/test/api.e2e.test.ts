@@ -1,0 +1,108 @@
+import "reflect-metadata";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { Test } from "@nestjs/testing";
+import type { INestApplication } from "@nestjs/common";
+import request from "supertest";
+import { createDb, migrate, registerChannel, createPlan, upsertOwner, type Sql } from "@obuna/core";
+import { signInitData } from "@obuna/telegram";
+import { AppModule } from "../src/app.module.js";
+import { loadConfig } from "../src/config.js";
+import { TG_API } from "../src/tokens.js";
+
+const url = process.env.TEST_DATABASE_URL;
+const d = url ? describe : describe.skip;
+const BOT = "123:TEST";
+
+d("API end to end (mock ATMOS, fake Telegram)", () => {
+  let app: INestApplication;
+  let sql: Sql;
+  const tg = {
+    createChatInviteLink: vi.fn(async () => ({ invite_link: "https://t.me/+abc" })),
+    unbanChatMember: vi.fn(async () => true),
+    sendMessage: vi.fn(async () => ({})),
+  };
+  const as = (id: number, name = "User") => `tma ${signInitData({ id, first_name: name }, BOT)}`;
+
+  beforeAll(async () => {
+    sql = createDb(url!);
+    await sql`DROP SCHEMA public CASCADE`;
+    await sql`CREATE SCHEMA public`;
+    await migrate(sql);
+    const owner = await upsertOwner(sql, { id: 111, first_name: "Jasur" });
+    const ch = await registerChannel(sql, owner.id, { id: -1001, title: "Fitness Akademiya" });
+    await createPlan(sql, owner.id, ch.id, { title: "1 oy", duration_days: 30, price: 4_900_000 });
+
+    const cfg = loadConfig({
+      DATABASE_URL: url, BOT_TOKEN: BOT, HOLD_HOURS: "0", PLATFORM_ADMIN_IDS: "999", ATMOS_MOCK: "true",
+    } as NodeJS.ProcessEnv);
+    const mod = await Test.createTestingModule({ imports: [AppModule.forConfig(cfg)] })
+      .overrideProvider(TG_API).useValue(tg)
+      .compile();
+    app = mod.createNestApplication();
+    await app.init();
+  });
+  afterAll(async () => {
+    await app?.close();
+    await sql?.end();
+  });
+
+  it("rejects requests without Telegram signature", async () => {
+    await request(app.getHttpServer()).get("/api/me").expect(401);
+    await request(app.getHttpServer()).get("/api/me").set("Authorization", "tma hash=bad").expect(401);
+  });
+
+  it("runs the full flow: channel page → pay → invite → cashbox → withdraw → payout", async () => {
+    const http = request(app.getHttpServer());
+    const page = await http.get("/api/channels/fitness-akademiya").expect(200);
+    const planId = page.body.plans[0].id;
+    expect(page.body.plans[0].price).toBe(4_900_000);
+
+    const start = await http.post("/api/checkout").set("Authorization", as(222, "Aziz"))
+      .send({ planId, autoRenew: true, cardNumber: "8600 1234 5678 4417", expiry: "09/28" }).expect(201);
+    await http.post(`/api/checkout/${start.body.paymentId}/confirm`).set("Authorization", as(222, "Aziz"))
+      .send({ otp: "000000" }).expect(402);
+    const ok = await http.post(`/api/checkout/${start.body.paymentId}/confirm`).set("Authorization", as(222, "Aziz"))
+      .send({ otp: "111111" }).expect(201);
+    expect(ok.body.status).toBe("paid");
+    expect(ok.body.autoRenew).toBe(true);
+    expect(tg.createChatInviteLink).toHaveBeenCalledWith(-1001, expect.objectContaining({ member_limit: 1 }));
+    expect(tg.sendMessage).toHaveBeenCalledWith(111, expect.stringContaining("44 100 so'm"));
+
+    // Someone else cannot confirm or see this payment.
+    await http.post(`/api/checkout/${start.body.paymentId}/confirm`).set("Authorization", as(333))
+      .send({ otp: "111111" }).expect(404);
+
+    const subs = await http.get("/api/me/subscriptions").set("Authorization", as(222, "Aziz")).expect(200);
+    expect(subs.body[0].channel_title).toBe("Fitness Akademiya");
+
+    await http.get("/api/owner/overview").set("Authorization", as(222)).expect(403);
+    const ov = await http.get("/api/owner/overview").set("Authorization", as(111, "Jasur")).expect(200);
+    expect(ov.body.wallet.available).toBe(4_410_000);
+    expect(ov.body.stats.activeSubscribers).toBe(1);
+
+    await http.post("/api/owner/withdrawals").set("Authorization", as(111))
+      .send({ amount: 9_000_000, cardNumber: "9860123456784417" }).expect(400);
+    const w = await http.post("/api/owner/withdrawals").set("Authorization", as(111))
+      .send({ amount: 4_000_000, cardNumber: "9860123456784417" }).expect(201);
+    expect(w.body.card_number).toBe("•••• 4417");
+
+    await http.get("/api/platform/withdrawals").set("Authorization", as(111)).expect(403);
+    const pending = await http.get("/api/platform/withdrawals").set("Authorization", as(999)).expect(200);
+    expect(pending.body).toHaveLength(1);
+    await http.post(`/api/platform/withdrawals/${w.body.id}/paid`).set("Authorization", as(999)).expect(201);
+    const wallet = await http.get("/api/owner/wallet").set("Authorization", as(111)).expect(200);
+    expect(wallet.body.available).toBe(410_000);
+    expect(wallet.body.withdrawals[0].status).toBe("paid");
+  });
+
+  it("lets an owner manage plans but not another owner's", async () => {
+    const http = request(app.getHttpServer());
+    const ov = await http.get("/api/owner/overview").set("Authorization", as(111)).expect(200);
+    const chId = ov.body.channels[0].id;
+    const p = await http.post(`/api/owner/channels/${chId}/plans`).set("Authorization", as(111))
+      .send({ title: "3 oy", durationDays: 90, price: 12_500_000 }).expect(201);
+    await http.patch(`/api/owner/plans/${p.body.id}`).set("Authorization", as(111)).send({ isActive: false }).expect(200);
+    await upsertOwner(sql, { id: 444, first_name: "Boshqa" });
+    await http.patch(`/api/owner/plans/${p.body.id}`).set("Authorization", as(444)).send({ price: 1 }).expect(404);
+  });
+});
