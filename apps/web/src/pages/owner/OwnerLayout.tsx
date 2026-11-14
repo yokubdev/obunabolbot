@@ -9,6 +9,8 @@ const NAV = [
   { to: "/owner/subscribers", icon: "users", label: "Obunachilar" },
   { to: "/owner/plans", icon: "tag", label: "Tariflar" },
   { to: "/owner/kassa", icon: "wallet", label: "Kassa" },
+  // One Telegram account can be both an owner and a subscriber: switch roles without leaving the app.
+  { to: "/my", icon: "card", label: "Obunalarim" },
 ];
 
 export type OwnerCtx = { overview: Overview; reload: () => Promise<void> };
@@ -51,7 +53,7 @@ export default function OwnerLayout() {
         <main className="mx-auto w-full max-w-6xl flex-1 px-4 pb-28 pt-5 md:px-8 md:pb-10 md:pt-8">
           <Outlet context={{ overview: data, reload } satisfies OwnerCtx} />
         </main>
-        <nav aria-label="Bo'limlar" className="fixed inset-x-0 bottom-0 grid grid-cols-4 border-t border-line bg-bg/95 px-1 pb-5 pt-1.5 backdrop-blur md:hidden">
+        <nav aria-label="Bo'limlar" className="fixed inset-x-0 bottom-0 grid grid-cols-5 border-t border-line bg-bg/95 px-1 pb-5 pt-1.5 backdrop-blur md:hidden">
           {NAV.map((n) => (
             <NavLink key={n.to} to={n.to} end={n.end}
               className={({ isActive }) => cx("flex min-h-12 flex-col items-center justify-center gap-0.5 text-[11px] font-medium", isActive ? "text-accent" : "text-muted")}>

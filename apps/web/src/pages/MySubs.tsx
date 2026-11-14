@@ -16,7 +16,12 @@ export default function MySubs() {
 
   return (
     <main className="mx-auto flex max-w-md flex-col gap-4 p-4">
-      <h1 className="pt-2 text-2xl font-bold tracking-tight">Mening obunalarim</h1>
+      <div className="flex items-center justify-between gap-3 pt-2">
+        <h1 className="text-2xl font-bold tracking-tight">Mening obunalarim</h1>
+        <Link to="/owner" className="flex h-9 shrink-0 items-center rounded-full bg-raised px-3 text-sm font-medium text-accent">
+          Kanal egasi
+        </Link>
+      </div>
       <Segmented value={tab} onChange={setTab} options={[{ value: "active", label: `Faol · ${count("active")}` }, { value: "expired", label: `Tugagan · ${count("expired")}` }]} />
       {list.length === 0 && <Card className="p-6 text-center text-sm text-muted">Bu yerda hozircha hech narsa yo'q.</Card>}
       {list.map((s) => {
