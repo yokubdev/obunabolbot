@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger } from "@nestjs/common";
 import type { Api } from "grammy";
 import {
   AppError, assertCheckoutRate, claimPaymentForConfirm, commissionFor, confirmPayment, createPayment, getPayment, getPlan,
-  markPaymentFailed, markPaymentPendingOtp, releasePaymentClaim, sessionIdOf, upsertSubscriber, type Sql, type TgUser,
+  markPaymentFailed, markPaymentPendingOtp, releasePaymentClaim, resolvePromo, sessionIdOf, upsertSubscriber, type Sql, type TgUser,
 } from "@obuna/core";
 import { ProviderError, type CardPaymentProvider } from "@obuna/atmos";
 import { grantAccess, notifyOwnerSale, notifyRenewed } from "@obuna/telegram";
@@ -21,18 +21,27 @@ export class CheckoutService {
   ) {}
 
   /** Step 1: create the payment and send an SMS code to the card owner. */
-  async start(user: TgUser, a: { planId: number; autoRenew: boolean; cardNumber: string; expiry: string }) {
+  async checkPromo(user: TgUser, planId: number, code: string) {
+    const subscriber = await upsertSubscriber(this.sql, user);
+    const plan = await getPlan(this.sql, planId);
+    if (!plan.is_active) throw new AppError("plan_inactive", "Bu tarif hozir sotilmayapti");
+    const p = await resolvePromo(this.sql, plan, code, subscriber.id);
+    return { code: p.promo.code, listPrice: p.listPrice, discount: p.discount, price: p.price };
+  }
+
+  async start(user: TgUser, a: { planId: number; autoRenew: boolean; cardNumber: string; expiry: string; promoCode?: string }) {
     const subscriber = await upsertSubscriber(this.sql, user);
     await assertCheckoutRate(this.sql, subscriber.id);
     const { payment } = await createPayment(this.sql, {
       subscriberId: subscriber.id, planId: a.planId, provider: this.provider.name, autoRenew: a.autoRenew,
+      promoCode: a.promoCode || null,
     });
     try {
       const { sessionId, phoneMask } = await this.provider.startCardPayment({
         paymentId: payment.id, amount: payment.amount, cardNumber: a.cardNumber.replace(/\D/g, ""), expiry: a.expiry,
       });
       await markPaymentPendingOtp(this.sql, payment.id, sessionId);
-      return { paymentId: payment.id, amount: payment.amount, phoneMask };
+      return { paymentId: payment.id, amount: payment.amount, listPrice: payment.list_price, phoneMask };
     } catch (e) {
       await markPaymentFailed(this.sql, payment.id, (e as Error).message);
       throw e;

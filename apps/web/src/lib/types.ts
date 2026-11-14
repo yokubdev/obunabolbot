@@ -23,3 +23,8 @@ export interface LedgerRow {
 export interface Withdrawal { id: number; amount: number; card_number: string; status: "pending" | "paid" | "rejected"; note: string | null; created_at: string }
 export interface WalletFull extends Wallet { ledger: LedgerRow[]; withdrawals: Withdrawal[] }
 export interface Me { user: { id: number; first_name: string }; isOwner: boolean; isPlatformAdmin: boolean; botUsername: string }
+
+export interface Promo {
+  id: number; channel_id: number; code: string; kind: "percent" | "amount"; value: number; plan_id: number | null;
+  max_uses: number | null; used_count: number; expires_at: string | null; is_active: boolean; created_at: string;
+}

@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Inject, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { z } from "zod";
 import {
-  createPlan, getOwnedChannel, getOwnerStats, getWallet, listLedger, listOwnerChannels, listOwnerSubscribers,
+  createPlan, createPromo, getOwnedChannel, listPromos, setPromoActive, getOwnerStats, getWallet, listLedger, listOwnerChannels, listOwnerSubscribers,
   listPlans, listWithdrawals, requestWithdrawal, updateChannel, updatePlan, type Owner, type OwnerSubFilter, type Sql,
   type Withdrawal,
 } from "@obuna/core";
@@ -22,6 +22,15 @@ const PlanPatch = z.object({
 const ChannelPatch = z.object({ description: z.string().max(500).optional(), slug: z.string().optional() });
 const WithdrawBody = z.object({ amount: z.number().int().positive(), cardNumber: z.string().max(32) });
 const ChannelPatchStrict = ChannelPatch.strict();
+const PromoBody = z.object({
+  code: z.string().trim().min(3).max(20),
+  kind: z.enum(["percent", "amount"]),
+  value: z.number().int().positive().max(10_000_000_000),
+  planId: z.number().int().positive().nullable().optional(),
+  maxUses: z.number().int().min(1).max(1_000_000).nullable().optional(),
+  expiresAt: z.string().datetime().nullable().optional(),
+}).strict();
+const PromoPatch = z.object({ isActive: z.boolean() }).strict();
 
 /** What an owner may see of a payout: never the encrypted card blob. */
 const publicWithdrawal = (w: Withdrawal) => ({
@@ -76,6 +85,25 @@ export class OwnerController {
   patchPlan(@CurrentOwner() owner: Owner, @Param("id", ParseIntPipe) id: number, @Body() body: unknown) {
     const b = PlanPatch.parse(body);
     return updatePlan(this.sql, owner.id, id, { title: b.title, price: b.price, is_active: b.isActive });
+  }
+
+  @Get("channels/:id/promos")
+  promos(@CurrentOwner() owner: Owner, @Param("id", ParseIntPipe) id: number) {
+    return listPromos(this.sql, owner.id, id);
+  }
+
+  @Post("channels/:id/promos")
+  addPromo(@CurrentOwner() owner: Owner, @Param("id", ParseIntPipe) id: number, @Body() body: unknown) {
+    const b = PromoBody.parse(body);
+    return createPromo(this.sql, owner.id, id, {
+      code: b.code, kind: b.kind, value: b.value, planId: b.planId ?? null, maxUses: b.maxUses ?? null,
+      expiresAt: b.expiresAt ? new Date(b.expiresAt) : null,
+    });
+  }
+
+  @Patch("promos/:id")
+  patchPromo(@CurrentOwner() owner: Owner, @Param("id", ParseIntPipe) id: number, @Body() body: unknown) {
+    return setPromoActive(this.sql, owner.id, id, PromoPatch.parse(body).isActive);
   }
 
   @Patch("channels/:id")

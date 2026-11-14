@@ -3,7 +3,7 @@ import {
   claimDueRenewals, claimPaymentForConfirm, claimReminders, confirmPayment, createDb, createPayment, createPlan, decryptCard,
   encryptCard, expireDue, getWallet, hasActiveAccess, markPaymentPendingOtp, markWithdrawalPaid, MAX_OTP_ATTEMPTS, migrate,
   registerChannel, rejectWithdrawal, releasePaymentClaim, requestWithdrawal, upsertOwner, upsertSubscriber, assertCheckoutRate,
-  updateChannel, createPlan as addPlan, type Sql,
+  updateChannel, createPlan as addPlan, createPromo, resolvePromo, listPromos, setPromoActive, getPlan, type Sql,
 } from "../src/index.js";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -179,5 +179,50 @@ d("virtual cashbox", () => {
     const other = await registerChannel(sql, owner.id, { id: -1002, title: "Boshqa" });
     await expect(updateChannel(sql, owner.id, other.id, { slug: "fitness-akademiya" })).rejects.toThrow(/band/);
     await expect(addPlan(sql, owner.id, channel.id, { title: "x", duration_days: 30, price: 10_000_000_001 })).rejects.toThrow(/ko'pi/);
+  });
+
+  it("applies a promo code to the first payment only, once per subscriber", async () => {
+    const { owner, channel, plan, sub } = await setup();
+    await createPromo(sql, owner.id, channel.id, { code: "bahor20", kind: "percent", value: 20, maxUses: 2 });
+    const { payment } = await createPayment(sql, { subscriberId: sub.id, planId: plan.id, provider: "mock", autoRenew: true, promoCode: "Bahor20" });
+    expect(payment.amount).toBe(3_920_000);
+    expect(payment.list_price).toBe(4_900_000);
+    await confirmPayment(sql, payment.id, cfg, { cardToken: "tok" });
+    const [promo] = await listPromos(sql, owner.id, channel.id);
+    expect(promo!.used_count).toBe(1);
+    await expect(resolvePromo(sql, plan, "BAHOR20", sub.id)).rejects.toThrow(/allaqachon/);
+    // The renewal is at full price and is not mistaken for a price change.
+    await sql`UPDATE subscriptions SET expires_at = now() + interval '5 hours'`;
+    const [due] = await claimDueRenewals(sql);
+    expect(due!.last_amount).toBe(4_900_000);
+    expect(due!.plan_price).toBe(4_900_000);
+  });
+
+  it("rejects expired, used-up, disabled, foreign and other-plan codes with one message", async () => {
+    const { owner, channel, plan, sub } = await setup();
+    const other = await addPlan(sql, owner.id, channel.id, { title: "1 yil", duration_days: 365, price: 40_000_000 });
+    const p1 = await createPromo(sql, owner.id, channel.id, { code: "ONE", kind: "amount", value: 1_000_000, maxUses: 1 });
+    await sql`UPDATE promo_codes SET used_count = 1 WHERE id = ${p1.id}`;
+    const p2 = await createPromo(sql, owner.id, channel.id, { code: "OFF", kind: "percent", value: 10 });
+    await setPromoActive(sql, owner.id, p2.id, false);
+    const p3 = await createPromo(sql, owner.id, channel.id, { code: "OLD", kind: "percent", value: 10 });
+    await sql`UPDATE promo_codes SET expires_at = now() - interval '1 minute' WHERE id = ${p3.id}`;
+    await createPromo(sql, owner.id, channel.id, { code: "YEAR", kind: "percent", value: 10, planId: other.id });
+    const ch2 = await registerChannel(sql, owner.id, { id: -1003, title: "Ikkinchi" });
+    await createPromo(sql, owner.id, ch2.id, { code: "ELSE", kind: "percent", value: 10 });
+    for (const c of ["ONE", "OFF", "OLD", "YEAR", "ELSE", "NOPE", "x'; --"])
+      await expect(resolvePromo(sql, plan, c, sub.id)).rejects.toThrow(/yaroqsiz/);
+    expect((await resolvePromo(sql, await getPlan(sql, other.id), "YEAR", sub.id)).price).toBe(36_000_000);
+  });
+
+  it("validates promo codes and never discounts below 1 000 so'm", async () => {
+    const { owner, channel, plan, sub } = await setup();
+    const stranger = await upsertOwner(sql, { id: 999, first_name: "X" });
+    await expect(createPromo(sql, stranger.id, channel.id, { code: "HACK", kind: "percent", value: 50 })).rejects.toThrow();
+    await expect(createPromo(sql, owner.id, channel.id, { code: "BIG", kind: "percent", value: 95 })).rejects.toThrow(/90/);
+    await expect(createPromo(sql, owner.id, channel.id, { code: "a b", kind: "percent", value: 5 })).rejects.toThrow(/Kod/);
+    await createPromo(sql, owner.id, channel.id, { code: "HUGE", kind: "amount", value: 999_999_999 });
+    await expect(createPromo(sql, owner.id, channel.id, { code: "huge", kind: "percent", value: 5 })).rejects.toThrow(/bor/);
+    expect((await resolvePromo(sql, plan, "HUGE", sub.id)).price).toBe(100_000);
   });
 });

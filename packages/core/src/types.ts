@@ -22,6 +22,7 @@ export interface Subscription {
 }
 export interface Payment {
   id: number; subscriber_id: number; channel_id: number; plan_id: number; amount: number;
+  list_price: number | null; promo_code_id: number | null;
   provider: string; provider_tx_id: string | null;
   status: "created" | "pending_otp" | "confirming" | "paid" | "failed"; auto_renew: boolean; otp_attempts: number;
   error: string | null; created_at: Date; paid_at: Date | null;

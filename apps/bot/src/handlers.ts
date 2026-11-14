@@ -22,18 +22,32 @@ export function missingChannelRights(m: { can_invite_users?: boolean }): string[
   return m.can_invite_users ? [] : ["«Foydalanuvchilarni taklif qilish» (Add subscribers)"];
 }
 
+/** "kanal-slug_PROMO" → ["kanal-slug", "PROMO"]. */
+export function splitStartPayload(payload: string): [string, string | null] {
+  const i = payload.indexOf("_");
+  if (i < 0) return [payload, null];
+  const promo = payload.slice(i + 1).toUpperCase();
+  return [payload.slice(0, i), /^[A-Z0-9_]{3,20}$/.test(promo) ? promo : null];
+}
+
 export function registerHandlers(bot: Bot, d: BotDeps) {
   const app = (path: string) => `${d.webAppUrl}${path}`;
 
   bot.command("start", async (ctx) => {
     const payload = ctx.match?.trim();
     if (payload) {
-      // t.me/<bot>?start=<slug>: a subscriber came from a channel's link.
+      // t.me/<bot>?start=<slug> or <slug>_<PROMO>: a subscriber came from a channel's link.
+      // Slugs never contain "_", so everything after the first one is a promo code.
+      const [slug, promo] = splitStartPayload(payload);
       try {
-        const ch = await getChannelBySlug(d.sql, payload);
-        await ctx.reply(`«${ch.title}» yopiq kanaliga obuna bo'lish uchun tarifni tanlang.`, {
-          reply_markup: webAppButton("Tariflarni ko'rish", app(`/c/${ch.slug}`)),
-        });
+        const ch = await getChannelBySlug(d.sql, slug);
+        const path = promo ? `/c/${ch.slug}?promo=${encodeURIComponent(promo)}` : `/c/${ch.slug}`;
+        await ctx.reply(
+          promo
+            ? `«${ch.title}» yopiq kanaliga obuna bo'lish uchun tarifni tanlang. Promo-kod: ${promo}`
+            : `«${ch.title}» yopiq kanaliga obuna bo'lish uchun tarifni tanlang.`,
+          { reply_markup: webAppButton("Tariflarni ko'rish", app(path)) },
+        );
         return;
       } catch (e) {
         if (!(e instanceof AppError)) throw e;

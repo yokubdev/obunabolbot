@@ -9,7 +9,9 @@ const StartBody = z.object({
   autoRenew: z.boolean().default(true),
   cardNumber: z.string().regex(/^[\d ]{16,19}$/, "16 xonali karta raqami"),
   expiry: z.string().regex(/^\d{2}\/?\d{2}$/, "MM/YY"),
+  promoCode: z.string().trim().max(20).optional(),
 });
+const PromoBody = z.object({ planId: z.number().int().positive(), code: z.string().trim().min(1).max(20) });
 const ConfirmBody = z.object({ otp: z.string().regex(/^\d{4,6}$/) });
 
 /** "09/28" (MM/YY, as printed on the card) → "2809" (YYmm, as ATMOS expects). */
@@ -27,6 +29,13 @@ export class CheckoutController {
   start(@CurrentUser() user: TgUser, @Body() body: unknown) {
     const b = StartBody.parse(body);
     return this.checkout.start(user, { ...b, expiry: toAtmosExpiry(b.expiry) });
+  }
+
+  /** Shows the discounted price before the subscriber enters a card. */
+  @Post("promo")
+  promo(@CurrentUser() user: TgUser, @Body() body: unknown) {
+    const b = PromoBody.parse(body);
+    return this.checkout.checkPromo(user, b.planId, b.code);
   }
 
   @Post(":id/confirm")

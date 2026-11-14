@@ -1,11 +1,13 @@
-import { useState } from "react";
-import { useParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useParams, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { date, durationLabel, som } from "../lib/format";
 import { haptic } from "../lib/telegram";
 import type { PublicChannel, PublicPlan } from "../lib/types";
 import { useApi } from "../lib/useApi";
 import { Avatar, Button, Card, ErrorBox, Field, Icon, SectionTitle, Spinner, Toggle } from "../components/ui";
+
+type PromoQuote = { code: string; planId: number; listPrice: number; discount: number; price: number };
 
 type Step = { kind: "plans" } | { kind: "card" } | { kind: "otp"; paymentId: number; phone: string | null } | { kind: "done"; expiresAt: string };
 
@@ -26,6 +28,29 @@ export default function ChannelPage() {
   const [autoRenew, setAutoRenew] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [params] = useSearchParams();
+  const linkPromo = params.get("promo")?.trim().toUpperCase() || null;
+  const [promoText, setPromoText] = useState(linkPromo ?? "");
+  const [promoOpen, setPromoOpen] = useState(!!linkPromo);
+  const [appliedCode, setAppliedCode] = useState<string | null>(linkPromo);
+  const [promo, setPromo] = useState<PromoQuote | null>(null);
+  const [promoErr, setPromoErr] = useState<string | null>(null);
+  const [promoBusy, setPromoBusy] = useState(false);
+  const [promoTry, setPromoTry] = useState(0);
+  const planId = data ? (picked ?? data.plans[1]?.id ?? data.plans[0]?.id ?? null) : null;
+
+  // The discount depends on the plan (a code can be limited to one), so re-check it when the plan changes.
+  useEffect(() => {
+    if (!appliedCode || !planId) return;
+    let stale = false;
+    setPromoBusy(true);
+    setPromoErr(null);
+    api<Omit<PromoQuote, "planId">>("/api/checkout/promo", { body: { planId, code: appliedCode } })
+      .then((q) => { if (!stale) setPromo({ ...q, planId }); })
+      .catch((e) => { if (!stale) { setPromo(null); setPromoErr((e as Error).message); } })
+      .finally(() => { if (!stale) setPromoBusy(false); });
+    return () => { stale = true; };
+  }, [appliedCode, planId, promoTry]);
 
   if (loading) return <Spinner />;
   if (error || !data) return <div className="p-4"><ErrorBox error={error ?? new Error("Topilmadi")} onRetry={reload} /></div>;
@@ -34,6 +59,16 @@ export default function ChannelPage() {
   const plan = plans.find((p) => p.id === (picked ?? plans[1]?.id ?? plans[0]?.id)) ?? null;
   const monthly = (p: PublicPlan) => Math.round((p.price / p.durationDays) * 30);
   const base = plans[0] ? monthly(plans[0]) : 0;
+  const quote = promo && plan && promo.planId === plan.id ? promo : null;
+  const price = quote ? quote.price : plan?.price ?? 0;
+  const applyPromo = () => {
+    const code = promoText.trim().toUpperCase();
+    if (!code) return;
+    setPromo(null);
+    setAppliedCode(code);
+    setPromoTry((n) => n + 1);
+  };
+  const clearPromo = () => { setAppliedCode(null); setPromo(null); setPromoErr(null); setPromoText(""); };
 
   async function run(fn: () => Promise<void>) {
     setBusy(true);
@@ -51,7 +86,7 @@ export default function ChannelPage() {
   const startPayment = () =>
     run(async () => {
       const r = await api<{ paymentId: number; phoneMask: string | null }>("/api/checkout", {
-        body: { planId: plan!.id, autoRenew, cardNumber: card, expiry },
+        body: { planId: plan!.id, autoRenew, cardNumber: card, expiry, promoCode: quote?.code },
       });
       setStep({ kind: "otp", paymentId: r.paymentId, phone: r.phoneMask });
     });
@@ -97,6 +132,25 @@ export default function ChannelPage() {
                 );
               })}
             </div>
+            {!promoOpen ? (
+              <button className="self-start px-1 text-sm font-semibold text-accent" onClick={() => setPromoOpen(true)}>Promo-kodim bor</button>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                <div className="flex gap-2">
+                  <input aria-label="Promo-kod" placeholder="PROMO-KOD" maxLength={20} autoCapitalize="characters"
+                    value={promoText} onChange={(e) => setPromoText(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ""))}
+                    onKeyDown={(e) => e.key === "Enter" && applyPromo()}
+                    className="h-11 min-w-0 flex-1 rounded-xl bg-surface px-4 font-semibold tracking-wider outline-none focus:ring-2 focus:ring-accent" />
+                  {quote ? (
+                    <Button variant="soft" onClick={clearPromo}>Olib tashlash</Button>
+                  ) : (
+                    <Button variant="soft" disabled={promoBusy || promoText.length < 3} onClick={applyPromo}>{promoBusy ? "…" : "Qo'llash"}</Button>
+                  )}
+                </div>
+                {quote && <p className="px-1 text-xs font-medium text-accent">{quote.code}: −{som(quote.discount)} birinchi to'lovga. Keyingi to'lovlar to'liq narxda.</p>}
+                {promoErr && !quote && <p className="px-1 text-xs text-warn">{promoErr}</p>}
+              </div>
+            )}
             <Card className="divide-y divide-line">
               {[["lock", "Yopiq kanalga shaxsiy havola"], ["refresh", "Istalgan payt bekor qilish mumkin"], ["shield", "To'lov ATMOS orqali himoyalangan"]].map(([i, t]) => (
                 <div key={t} className="flex items-center gap-3 px-4 py-3 text-sm"><Icon name={i!} className="text-accent" size={18} />{t}</div>
@@ -109,7 +163,10 @@ export default function ChannelPage() {
           <Card className="mt-4 flex items-center gap-3 p-4">
             <Avatar name={channel.title} seed={channel.id} />
             <div className="flex flex-1 flex-col"><span className="font-semibold">{channel.title}</span><span className="text-xs text-muted">{plan.title}</span></div>
-            <span className="text-lg font-bold">{som(plan.price)}</span>
+            <span className="flex flex-col items-end">
+              {quote && <span className="text-xs text-muted line-through">{som(quote.listPrice)}</span>}
+              <span className="text-lg font-bold">{som(price)}</span>
+            </span>
           </Card>
         )}
 
@@ -151,13 +208,13 @@ export default function ChannelPage() {
       <footer className="fixed inset-x-0 bottom-0 border-t border-line bg-bg/90 px-4 pb-6 pt-3 backdrop-blur">
         <div className="mx-auto max-w-md">
           {step.kind === "plans" && plan && (
-            <Button size="lg" className="w-full" onClick={() => setStep({ kind: "card" })}>Obuna bo'lish · {som(plan.price)}</Button>
+            <Button size="lg" className="w-full" onClick={() => setStep({ kind: "card" })}>Obuna bo'lish · {som(price)}</Button>
           )}
           {step.kind === "card" && (
             <div className="flex gap-2">
               <Button variant="soft" size="lg" onClick={() => setStep({ kind: "plans" })}>Orqaga</Button>
               <Button size="lg" className="flex-1" disabled={busy || card.length < 19 || expiry.length < 5} onClick={startPayment}>
-                {busy ? "Yuborilmoqda…" : `${som(plan!.price)} to'lash`}
+                {busy ? "Yuborilmoqda…" : `${som(price)} to'lash`}
               </Button>
             </div>
           )}

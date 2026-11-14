@@ -2,6 +2,7 @@ import type { Sql } from "./db.js";
 import { AppError, notFound } from "./errors.js";
 import { commissionFor } from "./money.js";
 import { getChannel, getPlan } from "./channels.js";
+import { resolvePromo, type AppliedPromo } from "./promos.js";
 import type { Channel, Payment, Plan, Subscription } from "./types.js";
 
 export interface LedgerConfig {
@@ -13,17 +14,19 @@ export interface LedgerConfig {
 
 export async function createPayment(
   sql: Sql,
-  args: { subscriberId: number; planId: number; provider: string; autoRenew: boolean },
-): Promise<{ payment: Payment; plan: Plan; channel: Channel }> {
+  args: { subscriberId: number; planId: number; provider: string; autoRenew: boolean; promoCode?: string | null },
+): Promise<{ payment: Payment; plan: Plan; channel: Channel; promo: AppliedPromo | null }> {
   const plan = await getPlan(sql, args.planId);
   if (!plan.is_active) throw new AppError("plan_inactive", "Bu tarif hozir sotilmayapti");
   const channel = await getChannel(sql, plan.channel_id);
   if (!channel.is_active) throw new AppError("channel_inactive", "Kanal hozir obuna qabul qilmayapti");
+  const promo = args.promoCode ? await resolvePromo(sql, plan, args.promoCode, args.subscriberId) : null;
   const [payment] = await sql<Payment[]>`
-    INSERT INTO payments (subscriber_id, channel_id, plan_id, amount, provider, status, auto_renew)
-    VALUES (${args.subscriberId}, ${channel.id}, ${plan.id}, ${plan.price}, ${args.provider}, 'created', ${args.autoRenew})
+    INSERT INTO payments (subscriber_id, channel_id, plan_id, amount, list_price, promo_code_id, provider, status, auto_renew)
+    VALUES (${args.subscriberId}, ${channel.id}, ${plan.id}, ${promo ? promo.price : plan.price}, ${plan.price},
+            ${promo ? promo.promo.id : null}, ${args.provider}, 'created', ${args.autoRenew})
     RETURNING *`;
-  return { payment: payment!, plan, channel };
+  return { payment: payment!, plan, channel, promo };
 }
 
 export async function getPayment(sql: Sql, id: number): Promise<Payment> {
@@ -106,7 +109,7 @@ export const claimDueRenewals = (sql: Sql) => sql<RenewalRow[]>`
   )
   SELECT d.id AS subscription_id, d.subscriber_id, d.plan_id, d.card_token, sb.tg_id AS subscriber_tg_id,
          c.title AS channel_title, c.slug AS channel_slug, pl.price AS plan_price, pl.is_active AS plan_active,
-         (SELECT p.amount FROM payments p WHERE p.subscriber_id = d.subscriber_id AND p.channel_id = d.channel_id
+         (SELECT COALESCE(p.list_price, p.amount) FROM payments p WHERE p.subscriber_id = d.subscriber_id AND p.channel_id = d.channel_id
             AND p.status = 'paid' ORDER BY p.paid_at DESC LIMIT 1) AS last_amount
   FROM due d
   JOIN subscribers sb ON sb.id = d.subscriber_id
@@ -162,6 +165,8 @@ export async function confirmPayment(
       UPDATE payments SET status = 'paid', paid_at = now(),
         provider_tx_id = COALESCE(${opts.providerTxId ?? null}, provider_tx_id)
       WHERE id = ${paymentId} RETURNING *`;
+    if (payment.promo_code_id !== null)
+      await tx`UPDATE promo_codes SET used_count = used_count + 1 WHERE id = ${payment.promo_code_id}`;
 
     const commission = commissionFor(payment.amount, cfg.commissionBps);
     const availableAt = new Date(Date.now() + cfg.holdHours * 3600_000);

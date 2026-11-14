@@ -153,4 +153,31 @@ d("API end to end (mock ATMOS, fake Telegram)", () => {
     await http.get("/api/me").set("Authorization", `tma ${signInitData({ id: 1, first_name: "x" }, BOT, now + 3600)}`).expect(401);
     await http.get("/api/me").set("Authorization", `tma ${signInitData({ id: 1, first_name: "x" }, "999:OTHER")}`).expect(401);
   });
+
+  it("lets an owner create promo codes and a subscriber pay the discounted price", async () => {
+    const http = request(app.getHttpServer());
+    const ov = await http.get("/api/owner/overview").set("Authorization", as(111)).expect(200);
+    const chId = ov.body.channels[0].id;
+    const promo = await http.post(`/api/owner/channels/${chId}/promos`).set("Authorization", as(111))
+      .send({ code: "yoz50", kind: "percent", value: 50 }).expect(201);
+    expect(promo.body.code).toBe("YOZ50");
+    await http.post(`/api/owner/channels/${chId}/promos`).set("Authorization", as(444))
+      .send({ code: "STEAL", kind: "percent", value: 50 }).expect(404);
+    await http.patch(`/api/owner/promos/${promo.body.id}`).set("Authorization", as(444)).send({ isActive: false }).expect(404);
+
+    const page = await http.get("/api/channels/fitness-akademiya").expect(200);
+    const planId = page.body.plans[0].id;
+    const q = await http.post("/api/checkout/promo").set("Authorization", as(777)).send({ planId, code: "yoz50" }).expect(201);
+    expect(q.body).toMatchObject({ listPrice: 4_900_000, discount: 2_450_000, price: 2_450_000 });
+    const bad = await http.post("/api/checkout/promo").set("Authorization", as(777)).send({ planId, code: "NOPE" }).expect(400);
+    expect(bad.body.error.code).toBe("promo_invalid");
+
+    const start = await http.post("/api/checkout").set("Authorization", as(777))
+      .send({ planId, autoRenew: false, cardNumber: "8600123456784417", expiry: "09/28", promoCode: "YOZ50" }).expect(201);
+    expect(start.body.amount).toBe(2_450_000);
+    await http.post(`/api/checkout/${start.body.paymentId}/confirm`).set("Authorization", as(777)).send({ otp: "111111" }).expect(201);
+    await http.post("/api/checkout/promo").set("Authorization", as(777)).send({ planId, code: "YOZ50" }).expect(400);
+    const list = await http.get(`/api/owner/channels/${chId}/promos`).set("Authorization", as(111)).expect(200);
+    expect(list.body[0].used_count).toBe(1);
+  });
 });

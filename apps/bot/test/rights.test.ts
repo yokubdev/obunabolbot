@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { missingChannelRights } from "../src/handlers.js";
+import { missingChannelRights, splitStartPayload } from "../src/handlers.js";
 
 describe("missingChannelRights", () => {
   it("accepts a channel admin with every right, where can_restrict_members is false", () => {
@@ -8,5 +8,13 @@ describe("missingChannelRights", () => {
   });
   it("asks for the invite right when it is missing", () => {
     expect(missingChannelRights({ can_invite_users: false })).toHaveLength(1);
+  });
+});
+
+describe("splitStartPayload", () => {
+  it("reads a promo code after the channel link", () => {
+    expect(splitStartPayload("fitness-akademiya")).toEqual(["fitness-akademiya", null]);
+    expect(splitStartPayload("fitness-akademiya_bahor20")).toEqual(["fitness-akademiya", "BAHOR20"]);
+    expect(splitStartPayload("kanal_<x>")).toEqual(["kanal", null]);
   });
 });
