@@ -33,7 +33,7 @@ d("API end to end (mock ATMOS, fake Telegram)", () => {
     await createPlan(sql, owner.id, ch.id, { title: "1 oy", duration_days: 30, price: 4_900_000 });
 
     const cfg = loadConfig({
-      DATABASE_URL: url, BOT_TOKEN: BOT, HOLD_HOURS: "0", PLATFORM_ADMIN_IDS: "999", ATMOS_MOCK: "true",
+      DATABASE_URL: url, BOT_TOKEN: BOT, HOLD_HOURS: "0", JOBS_SECRET: "js", WEBHOOK_SECRET: "ws", PLATFORM_ADMIN_IDS: "999", ATMOS_MOCK: "true",
     } as NodeJS.ProcessEnv);
     const mod = await Test.createTestingModule({ imports: [AppModule.forConfig(cfg)] })
       .overrideProvider(TG_API).useValue(tg)
@@ -104,5 +104,15 @@ d("API end to end (mock ATMOS, fake Telegram)", () => {
     await http.patch(`/api/owner/plans/${p.body.id}`).set("Authorization", as(111)).send({ isActive: false }).expect(200);
     await upsertOwner(sql, { id: 444, first_name: "Boshqa" });
     await http.patch(`/api/owner/plans/${p.body.id}`).set("Authorization", as(444)).send({ price: 1 }).expect(404);
+  });
+
+  it("protects the webhook and the jobs endpoint with secrets", async () => {
+    const http = request(app.getHttpServer());
+    await http.post("/internal/jobs").expect(403);
+    await http.post("/internal/jobs").set("X-Jobs-Secret", "wrong").expect(403);
+    const r = await http.post("/internal/jobs").set("X-Jobs-Secret", "js").expect(200);
+    expect(r.body).toMatchObject({ renewed: 0, renewFailed: 0 });
+    await http.post("/telegram/webhook").send({ update_id: 1 }).expect(401);
+    await http.post("/telegram/webhook").set("X-Telegram-Bot-Api-Secret-Token", "nope").send({ update_id: 1 }).expect(401);
   });
 });

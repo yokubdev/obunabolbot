@@ -1,0 +1,29 @@
+# Free alternative to Railway: Render free web service + Neon free Postgres.
+# The free instance sleeps after 15 min idle, so point a free cron (cron-job.org) at
+# POST https://<service>.onrender.com/internal/jobs with header x-jobs-secret every 10 min.
+services:
+  - type: web
+    name: obuna
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: BOT_USERNAME
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
+      - key: PLATFORM_ADMIN_IDS
+        sync: false
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      - key: JOBS_SECRET
+        generateValue: true
+      - key: DEV_AUTH
+        value: "false"
+      - key: ATMOS_MOCK
+        value: "true"

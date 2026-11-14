@@ -9,6 +9,7 @@ import { CheckoutService } from "./checkout/checkout.service.js";
 import { MeController } from "./me/me.controller.js";
 import { OwnerController } from "./owner/owner.controller.js";
 import { PlatformController } from "./platform/platform.controller.js";
+import { TelegramController } from "./telegram/telegram.controller.js";
 import type { AppConfig } from "./config.js";
 
 @Module({})
@@ -17,7 +18,7 @@ export class AppModule {
     return {
       module: AppModule,
       imports: [CoreModule.forConfig(cfg)],
-      controllers: [ChannelsController, CheckoutController, MeController, OwnerController, PlatformController],
+      controllers: [ChannelsController, CheckoutController, MeController, OwnerController, PlatformController, TelegramController],
       providers: [
         CheckoutService, TelegramAuthGuard, OwnerGuard, PlatformAdminGuard,
         { provide: APP_FILTER, useClass: ErrorsFilter },
