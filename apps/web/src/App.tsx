@@ -9,12 +9,13 @@ import Plans from "./pages/owner/Plans";
 import Kassa from "./pages/owner/Kassa";
 import Platform from "./pages/Platform";
 
-/** t.me/<bot>?startapp=<slug> opens the Mini App root with start_param = slug. */
+/** t.me/<bot>?startapp=<slug>[_<PROMO>] opens the Mini App root with start_param set: one tap to the channel page. */
 function Home() {
   const nav = useNavigate();
   useEffect(() => {
     const start = (window as any).Telegram?.WebApp?.initDataUnsafe?.start_param as string | undefined;
-    nav(start ? `/c/${start}` : "/my", { replace: true });
+    const m = start?.match(/^([a-z0-9-]{3,40})(?:_([A-Za-z0-9_]{3,20}))?$/);
+    nav(m ? `/c/${m[1]}${m[2] ? `?promo=${encodeURIComponent(m[2].toUpperCase())}` : ""}` : "/my", { replace: true });
   }, [nav]);
   return null;
 }

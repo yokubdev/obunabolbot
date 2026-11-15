@@ -133,7 +133,7 @@ export function registerHandlers(bot: Bot, d: BotDeps) {
         from.id,
         `✅ «${channel.title}» ulandi va shaxsiy kassangiz ochildi.\n\n` +
           `Boshlang'ich tariflar qo'shildi (1, 3 va 12 oy), narxlarni paneldan o'zgartiring.\n` +
-          `Obunachilar uchun havola: https://t.me/${d.botUsername}?start=${channel.slug}`,
+          `Obunachilar uchun havola: https://t.me/${d.botUsername}?startapp=${channel.slug}`,
         { reply_markup: webAppButton("Panelni ochish", app("/owner")) },
       );
     } catch (e) {

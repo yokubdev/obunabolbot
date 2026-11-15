@@ -61,7 +61,7 @@ export class OwnerController {
       owner: { name: owner.name, username: owner.username },
       channels: channels.map((c) => ({
         ...c,
-        link: `https://t.me/${this.cfg.botUsername}?start=${c.slug}`,
+        link: `https://t.me/${this.cfg.botUsername}?startapp=${c.slug}`,
       })),
       stats,
       wallet,

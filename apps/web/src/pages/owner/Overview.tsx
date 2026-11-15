@@ -135,7 +135,7 @@ function ChannelSheet({ channel, onClose, onSaved }: { channel: OwnerChannel | n
         onChange={(e) => setTrial(e.target.value.replace(/\D/g, ""))}
         hint="Har bir yangi obunachi bir marta, kartasiz sinab ko'radi" />
       <Field label="Havola nomi" value={slug} maxLength={32} onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
-        hint={`t.me/…?start=${slug}`} />
+        hint={`t.me/…?startapp=${slug}`} />
       {err && <p role="alert" className="text-sm text-warn">{err}</p>}
       <Button size="lg" onClick={save} disabled={busy}>{busy ? "Saqlanmoqda…" : "Saqlash"}</Button>
     </Sheet>
