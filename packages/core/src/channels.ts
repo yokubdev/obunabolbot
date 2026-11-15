@@ -16,20 +16,22 @@ function slugify(title: string): string {
 export async function registerChannel(
   sql: Sql,
   ownerId: number,
-  chat: { id: number; title: string },
+  chat: { id: number; title: string; type?: "channel" | "supergroup" },
 ): Promise<Channel> {
+  const type = chat.type ?? "channel";
   const existing = await sql<Channel[]>`SELECT * FROM channels WHERE tg_chat_id = ${chat.id}`;
   if (existing[0]) {
     if (existing[0].owner_id !== ownerId) throw new AppError("channel_taken", "Bu kanal boshqa egaga ulangan", 409);
     const [row] = await sql<Channel[]>`
-      UPDATE channels SET title = ${chat.title}, is_active = true WHERE id = ${existing[0].id} RETURNING *`;
+      UPDATE channels SET title = ${chat.title}, is_active = true, chat_type = ${type} WHERE id = ${existing[0].id} RETURNING *`;
     return row!;
   }
   let slug = slugify(chat.title);
   const taken = await sql`SELECT 1 FROM channels WHERE slug = ${slug}`;
   if (taken.length) slug = `${slug}-${Math.abs(chat.id) % 100000}`;
   const [row] = await sql<Channel[]>`
-    INSERT INTO channels (owner_id, tg_chat_id, title, slug) VALUES (${ownerId}, ${chat.id}, ${chat.title}, ${slug})
+    INSERT INTO channels (owner_id, tg_chat_id, title, slug, chat_type)
+    VALUES (${ownerId}, ${chat.id}, ${chat.title}, ${slug}, ${type})
     RETURNING *`;
   return row!;
 }
@@ -63,9 +65,16 @@ export async function updateChannel(
   sql: Sql,
   ownerId: number,
   channelId: number,
-  patch: { description?: string; slug?: string },
+  patch: { description?: string; slug?: string; perks?: string[]; welcomeText?: string; trialDays?: number },
 ): Promise<Channel> {
   await getOwnedChannel(sql, ownerId, channelId);
+  const perks = patch.perks?.map((p) => p.trim()).filter(Boolean);
+  if (perks && (perks.length > MAX_PERKS || perks.some((p) => p.length > 80)))
+    throw new AppError("bad_perks", `Ko'pi bilan ${MAX_PERKS} ta band, har biri 80 belgigacha`);
+  if (patch.welcomeText !== undefined && patch.welcomeText.length > 1000)
+    throw new AppError("bad_welcome", "Xush kelibsiz xabari 1000 belgigacha");
+  if (patch.trialDays !== undefined && (!Number.isInteger(patch.trialDays) || patch.trialDays < 0 || patch.trialDays > 30))
+    throw new AppError("bad_trial", "Sinov muddati 0–30 kun");
   if (patch.slug !== undefined && !/^[a-z0-9-]{3,32}$/.test(patch.slug))
     throw new AppError("bad_slug", "Havola nomi 3–32 ta lotin harf, raqam yoki '-' bo'lishi kerak");
   if (patch.slug !== undefined && RESERVED_SLUGS.has(patch.slug))
@@ -77,7 +86,10 @@ export async function updateChannel(
   const [row] = await sql<Channel[]>`
     UPDATE channels SET
       description = COALESCE(${patch.description ?? null}, description),
-      slug = COALESCE(${patch.slug ?? null}, slug)
+      slug = COALESCE(${patch.slug ?? null}, slug),
+      perks = COALESCE(${perks ? sql.array(perks) : null}, perks),
+      welcome_text = COALESCE(${patch.welcomeText?.trim() ?? null}, welcome_text),
+      trial_days = COALESCE(${patch.trialDays ?? null}, trial_days)
     WHERE id = ${channelId} RETURNING *`;
   return row!;
 }
@@ -93,6 +105,7 @@ export async function getPlan(sql: Sql, id: number): Promise<Plan> {
   return row;
 }
 
+export const MAX_PERKS = 6;
 /** 100 000 000 so'm: far above any real plan, far below Number.MAX_SAFE_INTEGER. */
 export const MAX_PLAN_PRICE = 10_000_000_000;
 /** Paths of the app itself; a channel link may not shadow them. */

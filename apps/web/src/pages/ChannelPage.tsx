@@ -9,7 +9,7 @@ import { Avatar, Button, Card, ErrorBox, Field, Icon, SectionTitle, Spinner, Tog
 
 type PromoQuote = { code: string; planId: number; listPrice: number; discount: number; price: number };
 
-type Step = { kind: "plans" } | { kind: "card" } | { kind: "otp"; paymentId: number; phone: string | null } | { kind: "done"; expiresAt: string };
+type Step = { kind: "plans" } | { kind: "card" } | { kind: "otp"; paymentId: number; phone: string | null } | { kind: "done"; expiresAt: string; trial?: boolean };
 
 const fmtCard = (v: string) => v.replace(/\D/g, "").slice(0, 16).replace(/(\d{4})(?=\d)/g, "$1 ");
 const fmtExpiry = (v: string) => {
@@ -91,6 +91,13 @@ export default function ChannelPage() {
       setStep({ kind: "otp", paymentId: r.paymentId, phone: r.phoneMask });
     });
 
+  const startTrial = () =>
+    run(async () => {
+      const r = await api<{ expiresAt: string }>("/api/checkout/trial", { body: { channelId: channel.id } });
+      haptic("success");
+      setStep({ kind: "done", expiresAt: r.expiresAt, trial: true });
+    });
+
   const confirm = (paymentId: number) =>
     run(async () => {
       const r = await api<{ expiresAt: string }>(`/api/checkout/${paymentId}/confirm`, { body: { otp } });
@@ -100,16 +107,28 @@ export default function ChannelPage() {
 
   return (
     <div className="mx-auto flex min-h-screen max-w-md flex-col">
-      <main className="flex flex-1 flex-col gap-5 px-4 pb-32">
+      <main className="flex flex-1 flex-col gap-5 px-4 pb-44">
         {step.kind === "plans" && (
           <>
             <div className="-mx-4 h-28 bg-gradient-to-br from-accent-soft to-surface" />
             <header className="-mt-14 flex flex-col items-center gap-2 text-center">
-              <div className="rounded-full border-4 border-bg"><Avatar name={channel.title} size={84} seed={channel.id} /></div>
+              <div className="rounded-full border-4 border-bg"><Avatar name={channel.title} size={84} seed={channel.id} src={channel.photoUrl} /></div>
               <h1 className="text-2xl font-bold tracking-tight">{channel.title}</h1>
-              <p className="text-sm text-muted">{channel.subscribers} obunachi</p>
+              <p className="text-sm text-muted">{channel.chatType === "supergroup" ? "Yopiq guruh" : "Yopiq kanal"} · {channel.subscribers} obunachi</p>
               {channel.description && <p className="max-w-xs text-sm leading-relaxed text-ink/85">{channel.description}</p>}
             </header>
+            {channel.perks.length > 0 && (
+              <>
+                <SectionTitle>Obunada nimalar bor</SectionTitle>
+                <Card className="flex flex-col gap-2.5 p-4">
+                  {channel.perks.map((p) => (
+                    <div key={p} className="flex items-start gap-3 text-sm leading-snug">
+                      <Icon name="check" className="mt-0.5 shrink-0 text-accent" size={16} />{p}
+                    </div>
+                  ))}
+                </Card>
+              </>
+            )}
             <SectionTitle>Obuna turlari</SectionTitle>
             <div className="flex flex-col gap-2.5" role="radiogroup" aria-label="Tarif">
               {plans.map((p) => {
@@ -152,7 +171,7 @@ export default function ChannelPage() {
               </div>
             )}
             <Card className="divide-y divide-line">
-              {[["lock", "Yopiq kanalga shaxsiy havola"], ["refresh", "Istalgan payt bekor qilish mumkin"], ["shield", "To'lov ATMOS orqali himoyalangan"]].map(([i, t]) => (
+              {[["lock", channel.chatType === "supergroup" ? "Yopiq guruhga shaxsiy havola" : "Yopiq kanalga shaxsiy havola"], ["refresh", "Istalgan payt bekor qilish mumkin"], ["shield", "To'lov ATMOS orqali himoyalangan"]].map(([i, t]) => (
                 <div key={t} className="flex items-center gap-3 px-4 py-3 text-sm"><Icon name={i!} className="text-accent" size={18} />{t}</div>
               ))}
             </Card>
@@ -161,7 +180,7 @@ export default function ChannelPage() {
 
         {step.kind !== "plans" && plan && (
           <Card className="mt-4 flex items-center gap-3 p-4">
-            <Avatar name={channel.title} seed={channel.id} />
+            <Avatar name={channel.title} seed={channel.id} src={channel.photoUrl} />
             <div className="flex flex-1 flex-col"><span className="font-semibold">{channel.title}</span><span className="text-xs text-muted">{plan.title}</span></div>
             <span className="flex flex-col items-end">
               {quote && <span className="text-xs text-muted line-through">{som(quote.listPrice)}</span>}
@@ -197,7 +216,7 @@ export default function ChannelPage() {
         {step.kind === "done" && (
           <div className="flex flex-col items-center gap-3 pt-10 text-center">
             <div className="flex size-18 items-center justify-center rounded-full bg-accent-soft text-accent"><Icon name="check" size={36} /></div>
-            <h2 className="text-xl font-bold">Obuna faollashdi</h2>
+            <h2 className="text-xl font-bold">{step.trial ? "Bepul sinov boshlandi" : "Obuna faollashdi"}</h2>
             <p className="max-w-xs text-sm leading-relaxed text-muted">{date(step.expiresAt)} gacha. Kanalga kirish havolasini botga yubordik.</p>
           </div>
         )}
@@ -208,7 +227,14 @@ export default function ChannelPage() {
       <footer className="fixed inset-x-0 bottom-0 border-t border-line bg-bg/90 px-4 pb-6 pt-3 backdrop-blur">
         <div className="mx-auto max-w-md">
           {step.kind === "plans" && plan && (
-            <Button size="lg" className="w-full" onClick={() => setStep({ kind: "card" })}>Obuna bo'lish · {som(price)}</Button>
+            <div className="flex flex-col gap-2">
+              <Button size="lg" className="w-full" onClick={() => setStep({ kind: "card" })}>Obuna bo'lish · {som(price)}</Button>
+              {channel.trialDays > 0 && (
+                <Button variant="ghost" className="w-full" disabled={busy} onClick={startTrial}>
+                  {busy ? "Yuborilmoqda…" : `${channel.trialDays} kun bepul sinab ko'rish`}
+                </Button>
+              )}
+            </div>
           )}
           {step.kind === "card" && (
             <div className="flex gap-2">

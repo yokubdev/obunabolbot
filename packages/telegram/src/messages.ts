@@ -13,7 +13,13 @@ export const webAppButton = (text: string, url: string) => new InlineKeyboard().
  */
 export async function grantAccess(
   api: Api,
-  a: { tgChatId: number; tgUserId: number; channelTitle: string; expiresAt: Date; amount: number },
+  a: {
+    tgChatId: number; tgUserId: number; channelTitle: string; expiresAt: Date;
+    /** null for a free trial. */
+    amount: number | null;
+    /** The owner's own welcome note, sent as plain text. */
+    welcomeText?: string;
+  },
 ): Promise<void> {
   await api.unbanChatMember(a.tgChatId, a.tgUserId, { only_if_banned: true }).catch(() => {});
   const link = await api.createChatInviteLink(a.tgChatId, {
@@ -23,11 +29,13 @@ export async function grantAccess(
   });
   await api.sendMessage(
     a.tgUserId,
-    `✅ To'lov qabul qilindi: ${formatSom(a.amount)}\n\n` +
-      `«${a.channelTitle}» obunasi ${fmtDate(a.expiresAt)} gacha faol.\n` +
+    (a.amount === null
+      ? `🎁 Bepul sinov boshlandi.\n\n«${a.channelTitle}» ${fmtDate(a.expiresAt)} gacha ochiq.\n`
+      : `✅ To'lov qabul qilindi: ${formatSom(a.amount)}\n\n«${a.channelTitle}» obunasi ${fmtDate(a.expiresAt)} gacha faol.\n`) +
       `Havolani bosing va «Qo'shilish so'rovi»ni yuboring: bot uni darhol tasdiqlaydi. Havola faqat siz uchun ishlaydi.`,
     { reply_markup: new InlineKeyboard().url("Kanalga kirish", link.invite_link) },
   );
+  if (a.welcomeText?.trim()) await api.sendMessage(a.tgUserId, a.welcomeText.trim()).catch(() => {});
 }
 
 export async function notifyRenewed(api: Api, a: { tgUserId: number; channelTitle: string; expiresAt: Date; amount: number }) {

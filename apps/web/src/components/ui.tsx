@@ -1,4 +1,5 @@
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
+import { useState } from "react";
 
 const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(" ");
 
@@ -45,7 +46,10 @@ export function Badge({ tone = "neutral", children }: { tone?: "ok" | "warn" | "
 }
 
 const PALETTE = ["#2dd4bf", "#60a5fa", "#a78bfa", "#fb923c", "#f472b6", "#facc15"];
-export function Avatar({ name, size = 44, seed = 0 }: { name: string; size?: number; seed?: number }) {
+export function Avatar({ name, size = 44, seed = 0, src }: { name: string; size?: number; seed?: number; src?: string }) {
+  const [broken, setBroken] = useState(false);
+  if (src && !broken)
+    return <img src={src} alt="" aria-hidden="true" onError={() => setBroken(true)} className="shrink-0 rounded-full object-cover" style={{ width: size, height: size }} />;
   const ini = name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("");
   return (
     <div

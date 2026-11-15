@@ -201,7 +201,7 @@ export async function confirmPayment(
           starts_at = ${wasActive ? existing.starts_at : new Date()},
           expires_at = ${new Date(base.getTime() + durationMs)},
           auto_renew = ${payment.auto_renew && !!cardToken}, card_token = ${cardToken},
-          reminded_3d = false, reminded_1d = false
+          reminded_3d = false, reminded_1d = false, is_trial = false
         WHERE id = ${existing.id} RETURNING *`)[0]!;
     }
     return { payment: paid!, subscription, channel: channel!, alreadyPaid: false, wasActive };

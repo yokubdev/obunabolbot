@@ -16,10 +16,19 @@ export interface BotDeps {
 // Channels have no "ban users" toggle in Telegram's admin UI (can_restrict_members stays false even with
 // every right granted), so only the invite right is required. Removing expired members is best effort.
 const ADMIN_RIGHTS = "invite_users";
+const GROUP_ADMIN_RIGHTS = "invite_users+restrict_members";
 
 /** Rights the bot must have in a channel, as the Uzbek labels the owner sees in Telegram. */
 export function missingChannelRights(m: { can_invite_users?: boolean }): string[] {
   return m.can_invite_users ? [] : ["«Foydalanuvchilarni taklif qilish» (Add subscribers)"];
+}
+
+/** Groups do have a ban toggle, and it is needed there: members can stay in a group indefinitely otherwise. */
+export function missingGroupRights(m: { can_invite_users?: boolean; can_restrict_members?: boolean }): string[] {
+  const out: string[] = [];
+  if (!m.can_invite_users) out.push("«Havola orqali taklif qilish» (Invite users via link)");
+  if (!m.can_restrict_members) out.push("«Foydalanuvchilarni bloklash» (Ban users)");
+  return out;
 }
 
 /** "kanal-slug_PROMO" → ["kanal-slug", "PROMO"]. */
@@ -60,6 +69,7 @@ export function registerHandlers(bot: Bot, d: BotDeps) {
           .webApp("Mening obunalarim", app("/my"))
           .row()
           .url("Kanalimni ulash", `https://t.me/${d.botUsername}?startchannel&admin=${ADMIN_RIGHTS}`)
+          .url("Guruhimni ulash", `https://t.me/${d.botUsername}?startgroup&admin=${GROUP_ADMIN_RIGHTS}`)
           .row()
           .webApp("Kanal egasi paneli", app("/owner")),
       },
@@ -71,6 +81,7 @@ export function registerHandlers(bot: Bot, d: BotDeps) {
   bot.command("yordam", (ctx) =>
     ctx.reply(
       "Kanal egalari uchun: botni kanalingizga admin qiling («Foydalanuvchilarni taklif qilish» huquqi bilan). " +
+        "Guruh uchun «Havola orqali taklif qilish» va «Bloklash» huquqlari kerak. " +
         "Kassa avtomatik ochiladi, tariflarni paneldan sozlaysiz.\n\nObunachilar uchun: /obunam",
     ),
   );
@@ -78,8 +89,20 @@ export function registerHandlers(bot: Bot, d: BotDeps) {
   // The bot was added to / removed from a channel. Whoever promoted it becomes the owner.
   bot.on("my_chat_member", async (ctx) => {
     const chat = ctx.chat;
-    if (chat.type !== "channel") return;
+    if (chat.type === "private") return;
     const m = ctx.myChatMember.new_chat_member;
+    if (chat.type === "group") {
+      // Basic groups have no join-request links; Telegram upgrades a group to a supergroup when, for example,
+      // its history is made visible to new members.
+      if (m.status === "administrator")
+        await ctx.api
+          .sendMessage(ctx.myChatMember.from.id,
+            `«${chat.title}» oddiy guruh. Uni ulash uchun guruh sozlamalarida «Yangi a'zolar uchun chat tarixi»ni «Ko'rinadi» qiling (guruh supergroupga aylanadi), keyin botni qayta admin qiling.`)
+          .catch(() => {});
+      return;
+    }
+    const isGroup = chat.type === "supergroup";
+    const kind = isGroup ? "guruh" : "kanal";
     if (m.status !== "administrator") {
       await deactivateChannelByChatId(d.sql, chat.id);
       return;
@@ -90,18 +113,20 @@ export function registerHandlers(bot: Bot, d: BotDeps) {
     const promoter = await ctx.api.getChatMember(chat.id, from.id).catch(() => null);
     if (promoter?.status !== "creator") {
       await ctx.api
-        .sendMessage(from.id, `«${chat.title}» kanalini faqat kanal egasi (yaratuvchisi) ulay oladi. Botni egasi admin qilsin.`)
+        .sendMessage(from.id, `«${chat.title}» ${kind}ini faqat ${kind} egasi (yaratuvchisi) ulay oladi. Botni egasi admin qilsin.`)
         .catch(() => {});
       return;
     }
-    const missing = missingChannelRights(m);
+    const missing = isGroup ? missingGroupRights(m) : missingChannelRights(m);
     if (missing.length) {
-      await ctx.api.sendMessage(from.id, `«${chat.title}» kanalida botga ${missing.join(" va ")} huquqini bering.`).catch(() => {});
+      await ctx.api.sendMessage(from.id, `«${chat.title}» ${kind}ida botga ${missing.join(" va ")} huquqini bering.`).catch(() => {});
       return;
     }
     const owner = await upsertOwner(d.sql, from);
     try {
-      const channel = await registerChannel(d.sql, owner.id, { id: chat.id, title: chat.title ?? "Kanal" });
+      const channel = await registerChannel(d.sql, owner.id, {
+        id: chat.id, title: chat.title ?? "Kanal", type: isGroup ? "supergroup" : "channel",
+      });
       if ((await listPlans(d.sql, channel.id, false)).length === 0)
         await createDefaultPlans(d.sql, owner.id, channel.id, d.defaultMonthlyPrice);
       await ctx.api.sendMessage(

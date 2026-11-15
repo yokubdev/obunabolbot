@@ -1,12 +1,15 @@
 import { useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { MONTHS, som, somShort } from "../../lib/format";
-import { BarChart, Button, Card, Icon, SectionTitle, Stat, Avatar } from "../../components/ui";
+import { BarChart, Button, Card, Field, Icon, SectionTitle, Sheet, Stat, Avatar } from "../../components/ui";
+import { api } from "../../lib/api";
+import type { OwnerChannel } from "../../lib/types";
 import type { OwnerCtx } from "./OwnerLayout";
 
 export default function Overview() {
-  const { overview: o } = useOutletContext<OwnerCtx>();
+  const { overview: o, reload } = useOutletContext<OwnerCtx>();
   const [copied, setCopied] = useState<number | null>(null);
+  const [editing, setEditing] = useState<OwnerChannel | null>(null);
   const s = o.stats;
   const growth = s.revenuePrevMonth ? Math.round(((s.revenueThisMonth - s.revenuePrevMonth) / s.revenuePrevMonth) * 100) : null;
   const churn = s.activeSubscribers + s.churnedThisMonth ? (s.churnedThisMonth / (s.activeSubscribers + s.churnedThisMonth)) * 100 : 0;
@@ -52,7 +55,7 @@ export default function Overview() {
         <Card className="divide-y divide-line">
           {o.channels.map((c) => (
             <div key={c.id} className="flex flex-wrap items-center gap-3 p-4">
-              <Avatar name={c.title} seed={c.id} size={40} />
+              <Avatar name={c.title} seed={c.id} size={40} src={`/api/channels/${c.slug}/photo`} />
               <div className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate font-semibold">{c.title}</span>
                 <span className="truncate text-xs text-muted">{c.link}</span>
@@ -60,10 +63,81 @@ export default function Overview() {
               <Button variant="soft" onClick={() => { void navigator.clipboard?.writeText(c.link); setCopied(c.id); }}>
                 <Icon name={copied === c.id ? "check" : "copy"} size={16} />{copied === c.id ? "Nusxalandi" : "Havola"}
               </Button>
+              <Button variant="outline" onClick={() => setEditing(c)}>Sozlash</Button>
             </div>
           ))}
         </Card>
       </section>
+      <ChannelSheet channel={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void reload(); }} />
     </div>
+  );
+}
+
+const area = "min-h-24 w-full resize-y bg-transparent text-[15px] leading-snug text-ink outline-none placeholder:text-muted/60";
+
+/** The owner's channel page settings: what subscribers see before paying and what they get after. */
+function ChannelSheet({ channel, onClose, onSaved }: { channel: OwnerChannel | null; onClose: () => void; onSaved: () => void }) {
+  const [key, setKey] = useState<unknown>(null);
+  const [description, setDescription] = useState("");
+  const [slug, setSlug] = useState("");
+  const [perks, setPerks] = useState("");
+  const [welcome, setWelcome] = useState("");
+  const [trial, setTrial] = useState("0");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  if (channel !== key) {
+    setKey(channel);
+    setDescription(channel?.description ?? "");
+    setSlug(channel?.slug ?? "");
+    setPerks(channel?.perks.join("\n") ?? "");
+    setWelcome(channel?.welcome_text ?? "");
+    setTrial(String(channel?.trial_days ?? 0));
+    setErr(null);
+  }
+  const save = async () => {
+    if (!channel) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await api(`/api/owner/channels/${channel.id}`, {
+        method: "PATCH",
+        body: {
+          description, welcomeText: welcome, trialDays: Number(trial || 0),
+          perks: perks.split("\n").map((p) => p.trim()).filter(Boolean),
+          ...(slug !== channel.slug ? { slug } : {}),
+        },
+      });
+      onSaved();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Sheet open={!!channel} onClose={onClose} title={channel ? `«${channel.title}» sozlamalari` : ""}>
+      <label className="flex flex-col gap-1 rounded-xl bg-surface px-4 py-3 text-xs text-muted focus-within:ring-2 focus-within:ring-accent">
+        Tavsif (kanal sahifasida)
+        <textarea className={area} maxLength={500} value={description} onChange={(e) => setDescription(e.target.value)}
+          placeholder="Kanalda nima haqida yozasiz" />
+      </label>
+      <label className="flex flex-col gap-1 rounded-xl bg-surface px-4 py-3 text-xs text-muted focus-within:ring-2 focus-within:ring-accent">
+        Obunada nimalar bor (har qatorda bittasi, 6 tagacha)
+        <textarea className={area} value={perks} onChange={(e) => setPerks(e.target.value)}
+          placeholder={"Har kuni 2 ta mashg'ulot videosi\nShaxsiy ovqatlanish rejasi\nYopiq chatda savol-javob"} />
+      </label>
+      <label className="flex flex-col gap-1 rounded-xl bg-surface px-4 py-3 text-xs text-muted focus-within:ring-2 focus-within:ring-accent">
+        Xush kelibsiz xabari (to'lovdan keyin bot yuboradi)
+        <textarea className={area} maxLength={1000} value={welcome} onChange={(e) => setWelcome(e.target.value)}
+          placeholder="Xush kelibsiz! Avval qadalgan xabarni o'qing." />
+      </label>
+      <Field label="Bepul sinov (kun, 0 = o'chiq, 30 gacha)" inputMode="numeric" value={trial} maxLength={2}
+        onChange={(e) => setTrial(e.target.value.replace(/\D/g, ""))}
+        hint="Har bir yangi obunachi bir marta, kartasiz sinab ko'radi" />
+      <Field label="Havola nomi" value={slug} maxLength={32} onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
+        hint={`t.me/…?start=${slug}`} />
+      {err && <p role="alert" className="text-sm text-warn">{err}</p>}
+      <Button size="lg" onClick={save} disabled={busy}>{busy ? "Saqlanmoqda…" : "Saqlash"}</Button>
+    </Sheet>
   );
 }

@@ -1,10 +1,16 @@
 export interface PublicPlan { id: number; title: string; durationDays: number; price: number }
-export interface PublicChannel { id: number; title: string; slug: string; description: string; subscribers: number }
+export interface PublicChannel {
+  id: number; title: string; slug: string; description: string; subscribers: number;
+  perks: string[]; trialDays: number; chatType: "channel" | "supergroup"; photoUrl: string;
+}
 export interface MySub {
   id: number; status: "active" | "expired"; expires_at: string; auto_renew: boolean;
   channel_id: number; channel_title: string; channel_slug: string; plan_title: string; plan_price: number;
 }
-export interface OwnerChannel { id: number; title: string; slug: string; description: string; is_active: boolean; link: string }
+export interface OwnerChannel {
+  id: number; title: string; slug: string; description: string; is_active: boolean; link: string;
+  perks: string[]; welcome_text: string; trial_days: number; chat_type: "channel" | "supergroup";
+}
 export interface Wallet { available: number; pending: number; commissionThisMonth: number }
 export interface Stats {
   revenueThisMonth: number; revenuePrevMonth: number; activeSubscribers: number; newThisMonth: number;

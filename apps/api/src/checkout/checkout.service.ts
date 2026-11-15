@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger } from "@nestjs/common";
 import type { Api } from "grammy";
 import {
   AppError, assertCheckoutRate, claimPaymentForConfirm, commissionFor, confirmPayment, createPayment, getPayment, getPlan,
-  markPaymentFailed, markPaymentPendingOtp, releasePaymentClaim, resolvePromo, sessionIdOf, upsertSubscriber, type Sql, type TgUser,
+  markPaymentFailed, markPaymentPendingOtp, releasePaymentClaim, resolvePromo, sessionIdOf, startTrial, getChannel, displayName, upsertSubscriber, type Sql, type TgUser,
 } from "@obuna/core";
 import { ProviderError, type CardPaymentProvider } from "@obuna/atmos";
 import { grantAccess, notifyOwnerSale, notifyRenewed } from "@obuna/telegram";
@@ -27,6 +27,23 @@ export class CheckoutService {
     if (!plan.is_active) throw new AppError("plan_inactive", "Bu tarif hozir sotilmayapti");
     const p = await resolvePromo(this.sql, plan, code, subscriber.id);
     return { code: p.promo.code, listPrice: p.listPrice, discount: p.discount, price: p.price };
+  }
+
+  async startTrial(user: TgUser, channelId: number) {
+    const subscriber = await upsertSubscriber(this.sql, user);
+    const sub = await startTrial(this.sql, subscriber.id, channelId);
+    const channel = await getChannel(this.sql, channelId);
+    const [owner] = await this.sql<{ tg_id: number }[]>`SELECT tg_id FROM owners WHERE id = ${channel.owner_id}`;
+    const tasks = [
+      grantAccess(this.tg, {
+        tgChatId: channel.tg_chat_id, tgUserId: user.id, channelTitle: channel.title,
+        expiresAt: sub.expires_at, amount: null, welcomeText: channel.welcome_text,
+      }),
+      this.tg.sendMessage(owner!.tg_id, `🎁 ${displayName(user)} «${channel.title}» uchun ${channel.trial_days} kunlik bepul sinovni boshladi.`),
+    ];
+    for (const res of await Promise.allSettled(tasks))
+      if (res.status === "rejected") this.log.warn(`Telegram xabari yuborilmadi: ${String(res.reason)}`);
+    return { status: "trial", expiresAt: sub.expires_at, autoRenew: false };
   }
 
   async start(user: TgUser, a: { planId: number; autoRenew: boolean; cardNumber: string; expiry: string; promoCode?: string }) {
@@ -98,7 +115,7 @@ export class CheckoutService {
         ? notifyRenewed(this.tg, { tgUserId: user.id, channelTitle: r.channel.title, expiresAt: r.subscription.expires_at, amount: r.payment.amount })
         : grantAccess(this.tg, {
             tgChatId: r.channel.tg_chat_id, tgUserId: user.id, channelTitle: r.channel.title,
-            expiresAt: r.subscription.expires_at, amount: r.payment.amount,
+            expiresAt: r.subscription.expires_at, amount: r.payment.amount, welcomeText: r.channel.welcome_text,
           }),
       notifyOwnerSale(this.tg, {
         ownerTgId: owner!.tg_id,

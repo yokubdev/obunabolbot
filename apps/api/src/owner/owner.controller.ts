@@ -19,7 +19,13 @@ const PlanPatch = z.object({
   price: z.number().int().positive().max(10_000_000_000).optional(),
   isActive: z.boolean().optional(),
 });
-const ChannelPatch = z.object({ description: z.string().max(500).optional(), slug: z.string().optional() });
+const ChannelPatch = z.object({
+  description: z.string().max(500).optional(),
+  slug: z.string().optional(),
+  perks: z.array(z.string().max(80)).max(6).optional(),
+  welcomeText: z.string().max(1000).optional(),
+  trialDays: z.number().int().min(0).max(30).optional(),
+});
 const WithdrawBody = z.object({ amount: z.number().int().positive(), cardNumber: z.string().max(32) });
 const ChannelPatchStrict = ChannelPatch.strict();
 const PromoBody = z.object({

@@ -11,6 +11,7 @@ const StartBody = z.object({
   expiry: z.string().regex(/^\d{2}\/?\d{2}$/, "MM/YY"),
   promoCode: z.string().trim().max(20).optional(),
 });
+const TrialBody = z.object({ channelId: z.number().int().positive() });
 const PromoBody = z.object({ planId: z.number().int().positive(), code: z.string().trim().min(1).max(20) });
 const ConfirmBody = z.object({ otp: z.string().regex(/^\d{4,6}$/) });
 
@@ -36,6 +37,12 @@ export class CheckoutController {
   promo(@CurrentUser() user: TgUser, @Body() body: unknown) {
     const b = PromoBody.parse(body);
     return this.checkout.checkPromo(user, b.planId, b.code);
+  }
+
+  /** Free trial: no card, once per subscriber per channel. */
+  @Post("trial")
+  trial(@CurrentUser() user: TgUser, @Body() body: unknown) {
+    return this.checkout.startTrial(user, TrialBody.parse(body).channelId);
   }
 
   @Post(":id/confirm")

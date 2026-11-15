@@ -1,5 +1,7 @@
 import type { Sql } from "./db.js";
-import { notFound } from "./errors.js";
+import { AppError, notFound } from "./errors.js";
+import { getChannel } from "./channels.js";
+import type { Plan, Subscription } from "./types.js";
 
 export interface SubscriberSubRow {
   id: number;
@@ -110,4 +112,23 @@ export async function hasActiveAccess(sql: Sql, tgUserId: number, tgChatId: numb
     JOIN subscribers sb ON sb.id = s.subscriber_id JOIN channels c ON c.id = s.channel_id
     WHERE sb.tg_id = ${tgUserId} AND c.tg_chat_id = ${tgChatId} AND s.status = 'active' AND s.expires_at > now()`;
   return rows.length > 0;
+}
+
+/**
+ * Starts a channel's free trial for a subscriber. Only someone who has never had a subscription to the
+ * channel qualifies (the unique (subscriber, channel) row makes a second trial impossible, even concurrently).
+ */
+export async function startTrial(sql: Sql, subscriberId: number, channelId: number): Promise<Subscription> {
+  const channel = await getChannel(sql, channelId);
+  if (!channel.is_active || channel.trial_days <= 0) throw new AppError("no_trial", "Bu kanalda bepul sinov yo'q");
+  const [plan] = await sql<Plan[]>`
+    SELECT * FROM plans WHERE channel_id = ${channelId} AND is_active ORDER BY duration_days, sort LIMIT 1`;
+  if (!plan) throw new AppError("no_trial", "Bu kanalda bepul sinov yo'q");
+  const [row] = await sql<Subscription[]>`
+    INSERT INTO subscriptions (subscriber_id, channel_id, plan_id, status, starts_at, expires_at, is_trial)
+    VALUES (${subscriberId}, ${channelId}, ${plan.id}, 'active', now(), now() + make_interval(days => ${channel.trial_days}), true)
+    ON CONFLICT (subscriber_id, channel_id) DO NOTHING
+    RETURNING *`;
+  if (!row) throw new AppError("trial_used", "Bepul sinovdan faqat yangi obunachilar foydalana oladi", 409);
+  return row;
 }

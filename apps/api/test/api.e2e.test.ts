@@ -180,4 +180,25 @@ d("API end to end (mock ATMOS, fake Telegram)", () => {
     const list = await http.get(`/api/owner/channels/${chId}/promos`).set("Authorization", as(111)).expect(200);
     expect(list.body[0].used_count).toBe(1);
   });
+
+  it("lets an owner set up the channel page and a newcomer start a free trial once", async () => {
+    const http = request(app.getHttpServer());
+    const ov = await http.get("/api/owner/overview").set("Authorization", as(111)).expect(200);
+    const chId = ov.body.channels[0].id;
+    await http.patch(`/api/owner/channels/${chId}`).set("Authorization", as(111))
+      .send({ perks: ["Har kuni video"], welcomeText: "Xush kelibsiz!", trialDays: 3 }).expect(200);
+    await http.patch(`/api/owner/channels/${chId}`).set("Authorization", as(444)).send({ trialDays: 30 }).expect(404);
+    const page = await http.get("/api/channels/fitness-akademiya").expect(200);
+    expect(page.body.channel).toMatchObject({ perks: ["Har kuni video"], trialDays: 3, chatType: "channel" });
+    expect(page.body.channel.welcome_text).toBeUndefined();
+
+    const sent = tg.sendMessage.mock.calls.length;
+    await http.post("/api/checkout/trial").set("Authorization", as(888)).send({ channelId: chId }).expect(201);
+    const texts = tg.sendMessage.mock.calls.slice(sent).map((c) => String(c[1]));
+    expect(texts.some((t) => t.includes("Bepul sinov"))).toBe(true);
+    expect(texts).toContain("Xush kelibsiz!");
+    await http.post("/api/checkout/trial").set("Authorization", as(888)).send({ channelId: chId }).expect(409);
+    // Someone who already paid is not a newcomer either.
+    await http.post("/api/checkout/trial").set("Authorization", as(777)).send({ channelId: chId }).expect(409);
+  });
 });

@@ -3,7 +3,7 @@ import {
   claimDueRenewals, claimPaymentForConfirm, claimReminders, confirmPayment, createDb, createPayment, createPlan, decryptCard,
   encryptCard, expireDue, getWallet, hasActiveAccess, markPaymentPendingOtp, markWithdrawalPaid, MAX_OTP_ATTEMPTS, migrate,
   registerChannel, rejectWithdrawal, releasePaymentClaim, requestWithdrawal, upsertOwner, upsertSubscriber, assertCheckoutRate,
-  updateChannel, createPlan as addPlan, createPromo, resolvePromo, listPromos, setPromoActive, getPlan, type Sql,
+  updateChannel, createPlan as addPlan, createPromo, resolvePromo, listPromos, setPromoActive, getPlan, startTrial, type Sql,
 } from "../src/index.js";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -224,5 +224,29 @@ d("virtual cashbox", () => {
     await createPromo(sql, owner.id, channel.id, { code: "HUGE", kind: "amount", value: 999_999_999 });
     await expect(createPromo(sql, owner.id, channel.id, { code: "huge", kind: "percent", value: 5 })).rejects.toThrow(/bor/);
     expect((await resolvePromo(sql, plan, "HUGE", sub.id)).price).toBe(100_000);
+  });
+
+  it("gives a free trial once, then a payment extends it", async () => {
+    const { owner, channel, plan, sub } = await setup();
+    await expect(startTrial(sql, sub.id, channel.id)).rejects.toThrow(/sinov yo'q/);
+    await updateChannel(sql, owner.id, channel.id, { trialDays: 3, perks: [" Video ", "", "Chat"], welcomeText: "Salom!" });
+    const t = await startTrial(sql, sub.id, channel.id);
+    expect(t.is_trial).toBe(true);
+    expect(await hasActiveAccess(sql, 222, -1001)).toBe(true);
+    await expect(startTrial(sql, sub.id, channel.id)).rejects.toThrow(/yangi obunachilar/);
+    const r = await pay(sub.id, plan.id);
+    expect(r.wasActive).toBe(true);
+    expect(r.subscription.is_trial).toBe(false);
+    expect(r.subscription.expires_at.getTime() - t.expires_at.getTime()).toBe(30 * 86400_000);
+    const [ch] = await sql`SELECT perks, welcome_text FROM channels WHERE id = ${channel.id}`;
+    expect(ch!.perks).toEqual(["Video", "Chat"]);
+    await expect(updateChannel(sql, owner.id, channel.id, { trialDays: 31 })).rejects.toThrow(/0–30/);
+    await expect(updateChannel(sql, owner.id, channel.id, { perks: Array(7).fill("x") })).rejects.toThrow(/6 ta/);
+  });
+
+  it("registers a supergroup as a group", async () => {
+    const { owner } = await setup();
+    const g = await registerChannel(sql, owner.id, { id: -1009, title: "Yopiq guruh", type: "supergroup" });
+    expect(g.chat_type).toBe("supergroup");
   });
 });
