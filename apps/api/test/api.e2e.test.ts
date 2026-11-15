@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Test } from "@nestjs/testing";
 import type { INestApplication } from "@nestjs/common";
 import request from "supertest";
-import { createDb, migrate, registerChannel, createPlan, upsertOwner, type Sql } from "@obuna/core";
+import { createDb, migrate, registerChannel, createPlan, upsertOwner, type Sql, acceptRules } from "@obuna/core";
 import { signInitData } from "@obuna/telegram";
 import { AppModule } from "../src/app.module.js";
 import { loadConfig } from "../src/config.js";
@@ -30,10 +30,11 @@ d("API end to end (mock ATMOS, fake Telegram)", () => {
     await migrate(sql);
     const owner = await upsertOwner(sql, { id: 111, first_name: "Jasur" });
     const ch = await registerChannel(sql, owner.id, { id: -1001, title: "Fitness Akademiya" });
+    await acceptRules(sql, owner.id, ch.id);
     await createPlan(sql, owner.id, ch.id, { title: "1 oy", duration_days: 30, price: 4_900_000 });
 
     const cfg = loadConfig({
-      DATABASE_URL: url, BOT_TOKEN: BOT, HOLD_HOURS: "0", JOBS_SECRET: "js", WEBHOOK_SECRET: "ws", PLATFORM_ADMIN_IDS: "999", ATMOS_MOCK: "true",
+      DATABASE_URL: url, BOT_TOKEN: BOT, HOLD_HOURS: "0", NEW_CHANNEL_HOLD_HOURS: "0", JOBS_SECRET: "js", WEBHOOK_SECRET: "ws", PLATFORM_ADMIN_IDS: "999", ATMOS_MOCK: "true",
     } as NodeJS.ProcessEnv);
     const mod = await Test.createTestingModule({ imports: [AppModule.forConfig(cfg)] })
       .overrideProvider(TG_API).useValue(tg)
@@ -200,5 +201,25 @@ d("API end to end (mock ATMOS, fake Telegram)", () => {
     await http.post("/api/checkout/trial").set("Authorization", as(888)).send({ channelId: chId }).expect(409);
     // Someone who already paid is not a newcomer either.
     await http.post("/api/checkout/trial").set("Authorization", as(777)).send({ channelId: chId }).expect(409);
+  });
+
+  it("takes subscriber reports and lets only the platform block a channel", async () => {
+    const http = request(app.getHttpServer());
+    await http.post("/api/channels/fitness-akademiya/report").send({ reason: "fraud" }).expect(401);
+    await http.post("/api/channels/fitness-akademiya/report").set("Authorization", as(901)).send({ reason: "nonsense" }).expect(400);
+    const sent = tg.sendMessage.mock.calls.length;
+    await http.post("/api/channels/fitness-akademiya/report").set("Authorization", as(901)).send({ reason: "fraud", note: "pul oldi" }).expect(201);
+    expect(tg.sendMessage.mock.calls.slice(sent).some((c) => c[0] === 999 && String(c[1]).includes("shikoyat"))).toBe(true);
+
+    await http.get("/api/platform/moderation").set("Authorization", as(111)).expect(403);
+    const list = await http.get("/api/platform/moderation").set("Authorization", as(999)).expect(200);
+    const row = list.body.find((r: { slug: string }) => r.slug === "fitness-akademiya");
+    expect(row.open_reports).toBe(1);
+    await http.post(`/api/platform/channels/${row.id}/moderation`).set("Authorization", as(999)).send({ status: "blocked" }).expect(400);
+    await http.post(`/api/platform/channels/${row.id}/moderation`).set("Authorization", as(999)).send({ status: "blocked", reason: "Firibgarlik" }).expect(201);
+    await http.get("/api/channels/fitness-akademiya").expect(404);
+    await http.post("/api/owner/withdrawals").set("Authorization", as(111)).send({ amount: 1_000_000, cardNumber: "8600123456784417" }).expect(403);
+    await http.post(`/api/platform/channels/${row.id}/moderation`).set("Authorization", as(999)).send({ status: "active" }).expect(201);
+    await http.get("/api/channels/fitness-akademiya").expect(200);
   });
 });

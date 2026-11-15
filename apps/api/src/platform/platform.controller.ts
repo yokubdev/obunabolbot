@@ -1,7 +1,15 @@
 import { Body, Controller, Get, Inject, Logger, Param, ParseIntPipe, Post, UseGuards } from "@nestjs/common";
 import type { Api } from "grammy";
 import { z } from "zod";
-import { decryptCard, formatSom, listPendingWithdrawals, markWithdrawalPaid, rejectWithdrawal, type Sql, type Withdrawal } from "@obuna/core";
+import {
+  decryptCard, formatSom, listModeration, listPendingWithdrawals, markWithdrawalPaid, rejectWithdrawal, setModeration,
+  type Sql, type Withdrawal,
+} from "@obuna/core";
+
+const ModerationBody = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("active") }),
+  z.object({ status: z.literal("blocked"), reason: z.string().trim().min(3).max(300) }),
+]);
 import { CONFIG } from "../tokens.js";
 import type { AppConfig } from "../config.js";
 import { PlatformAdminGuard, TelegramAuthGuard } from "../common/auth.js";
@@ -47,6 +55,23 @@ export class PlatformController {
     const w = await rejectWithdrawal(this.sql, id, note);
     await this.tell(w.owner_id, `⚠️ ${formatSom(w.amount)} yechib bo'lmadi: ${note}. Pul kassangizga qaytarildi.`);
     return this.strip(w);
+  }
+
+  /** Channels in review, blocked, or with open reports. */
+  @Get("moderation")
+  moderation() {
+    return listModeration(this.sql);
+  }
+
+  @Post("channels/:id/moderation")
+  async moderate(@Param("id", ParseIntPipe) id: number, @Body() body: unknown) {
+    const b = ModerationBody.parse(body);
+    const c = await setModeration(this.sql, id, b.status, b.status === "blocked" ? b.reason : null);
+    await this.tell(c.owner_id, b.status === "blocked"
+      ? `⛔ «${c.title}» platforma qoidalarini buzgani uchun bloklandi: ${b.reason}\n` +
+        `Obuna sotish va pul yechish to'xtatildi. E'tirozingiz bo'lsa, shu botga oddiy xabar yozing, qo'llab-quvvatlashga boradi.`
+      : `✅ «${c.title}» tekshiruvdan o'tdi. Obuna va pul yechish odatdagidek ishlaydi.`);
+    return c;
   }
 
   private async tell(ownerId: number, text: string) {

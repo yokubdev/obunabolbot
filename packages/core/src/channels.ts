@@ -50,7 +50,7 @@ export async function getChannel(sql: Sql, id: number): Promise<Channel> {
 }
 
 export async function getChannelBySlug(sql: Sql, slug: string): Promise<Channel> {
-  const [row] = await sql<Channel[]>`SELECT * FROM channels WHERE slug = ${slug} AND is_active`;
+  const [row] = await sql<Channel[]>`SELECT * FROM channels WHERE slug = ${slug} AND is_active AND moderation <> 'blocked'`;
   if (!row) throw notFound("Kanal");
   return row;
 }

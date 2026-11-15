@@ -92,7 +92,7 @@ export class CheckoutService {
       throw e;
     }
     const result = await confirmPayment(
-      this.sql, paymentId, { commissionBps: this.cfg.commissionBps, holdHours: this.cfg.holdHours },
+      this.sql, paymentId, { commissionBps: this.cfg.commissionBps, holdHours: this.cfg.holdHours, newChannelHoldHours: this.cfg.newChannelHoldHours },
       { providerTxId: charged.providerTxId, cardToken: claimed.auto_renew ? charged.cardToken : null },
     );
     if (!result.alreadyPaid) await this.notify(result, user);

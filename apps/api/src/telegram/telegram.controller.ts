@@ -56,6 +56,7 @@ export class TelegramController implements OnModuleInit, OnApplicationBootstrap,
       webAppUrl: this.cfg.webAppUrl,
       botUsername: this.cfg.botUsername,
       defaultMonthlyPrice: this.cfg.defaultMonthlyPrice,
+      platformAdminIds: this.cfg.platformAdminIds,
     });
     this.bot.catch((e) => this.log.error(e.error));
     this.handle = webhookCallback(this.bot, "express", { secretToken: this.cfg.webhookSecret || undefined });
@@ -80,7 +81,7 @@ export class TelegramController implements OnModuleInit, OnApplicationBootstrap,
       const api = this.bot.api;
       await api.setWebhook(`${this.cfg.publicUrl}/telegram/webhook`, {
         secret_token: this.cfg.webhookSecret,
-        allowed_updates: ["message", "my_chat_member", "chat_join_request"],
+        allowed_updates: ["message", "callback_query", "my_chat_member", "chat_join_request"],
       });
       await api.setChatMenuButton({
         menu_button: { type: "web_app", text: "Obunalarim", web_app: { url: `${this.cfg.webAppUrl}/my` } },
@@ -127,7 +128,7 @@ export class TelegramController implements OnModuleInit, OnApplicationBootstrap,
       sql: this.sql,
       api: this.bot.api,
       provider: this.provider,
-      ledger: { commissionBps: this.cfg.commissionBps, holdHours: this.cfg.holdHours },
+      ledger: { commissionBps: this.cfg.commissionBps, holdHours: this.cfg.holdHours, newChannelHoldHours: this.cfg.newChannelHoldHours },
       webAppUrl: this.cfg.webAppUrl,
       log: (m) => this.log.warn(m),
     });

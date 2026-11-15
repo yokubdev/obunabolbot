@@ -1,6 +1,7 @@
 import type { Sql } from "./db.js";
 import { AppError, notFound } from "./errors.js";
 import { getChannel } from "./channels.js";
+import { assertCanSell } from "./moderation.js";
 import type { Plan, Subscription } from "./types.js";
 
 export interface SubscriberSubRow {
@@ -120,7 +121,8 @@ export async function hasActiveAccess(sql: Sql, tgUserId: number, tgChatId: numb
  */
 export async function startTrial(sql: Sql, subscriberId: number, channelId: number): Promise<Subscription> {
   const channel = await getChannel(sql, channelId);
-  if (!channel.is_active || channel.trial_days <= 0) throw new AppError("no_trial", "Bu kanalda bepul sinov yo'q");
+  if (channel.trial_days <= 0) throw new AppError("no_trial", "Bu kanalda bepul sinov yo'q");
+  assertCanSell(channel);
   const [plan] = await sql<Plan[]>`
     SELECT * FROM plans WHERE channel_id = ${channelId} AND is_active ORDER BY duration_days, sort LIMIT 1`;
   if (!plan) throw new AppError("no_trial", "Bu kanalda bepul sinov yo'q");

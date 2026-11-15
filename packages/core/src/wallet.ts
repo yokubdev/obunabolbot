@@ -2,6 +2,7 @@ import type { Sql } from "./db.js";
 import { AppError, notFound } from "./errors.js";
 import type { Withdrawal } from "./types.js";
 import { encryptCard } from "./cardvault.js";
+import { assertPayoutsAllowed } from "./moderation.js";
 
 export interface WalletSummary {
   /** Withdrawable now (tiyin). */
@@ -15,8 +16,8 @@ export interface WalletSummary {
 export async function getWallet(sql: Sql, ownerId: number): Promise<WalletSummary> {
   const [row] = await sql<{ available: number; pending: number; commission: number }[]>`
     SELECT
-      COALESCE(SUM(amount) FILTER (WHERE available_at <= now()), 0)::bigint AS available,
-      COALESCE(SUM(amount) FILTER (WHERE available_at > now()), 0)::bigint AS pending,
+      COALESCE(SUM(amount) FILTER (WHERE available_at <= now() OR type = 'withdrawal'), 0)::bigint AS available,
+      COALESCE(SUM(amount) FILTER (WHERE available_at > now() AND type <> 'withdrawal'), 0)::bigint AS pending,
       COALESCE(-SUM(amount) FILTER (WHERE type = 'commission' AND created_at >= date_trunc('month', now())), 0)::bigint AS commission
     FROM ledger_entries WHERE owner_id = ${ownerId}`;
   return { available: row!.available, pending: row!.pending, commissionThisMonth: row!.commission };
@@ -70,11 +71,15 @@ export async function requestWithdrawal(
   if (!Number.isInteger(amount) || amount < MIN_WITHDRAWAL)
     throw new AppError("bad_amount", "Eng kam yechish summasi 10 000 so'm");
   const cardNumber = normalizeCard(card);
+  await assertPayoutsAllowed(sql, ownerId);
   return sql.begin(async (tx) => {
     await tx`SELECT id FROM owners WHERE id = ${ownerId} FOR UPDATE`;
     const { available } = (await tx<{ available: number }[]>`
       SELECT COALESCE(SUM(amount), 0)::bigint AS available
-      FROM ledger_entries WHERE owner_id = ${ownerId} AND available_at <= now()`)[0]!;
+      FROM ledger_entries WHERE owner_id = ${ownerId}
+        -- Withdrawals count at once: their available_at is another transaction's now(), which can be
+        -- later than this transaction's now() and would otherwise let parallel requests overdraw.
+        AND (available_at <= now() OR type = 'withdrawal')`)[0]!;
     if (amount > available) throw new AppError("insufficient", "Kassada yetarli mablag' yo'q");
     const { today } = (await tx<{ today: number }[]>`
       SELECT COUNT(*)::int AS today FROM withdrawals WHERE owner_id = ${ownerId} AND created_at > now() - interval '1 day'`)[0]!;

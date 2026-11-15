@@ -48,4 +48,4 @@ process.once("SIGINT", stop);
 process.once("SIGTERM", stop);
 
 console.log(`@${me.username} ishga tushdi`);
-await bot.start({ allowed_updates: ["message", "my_chat_member", "chat_join_request"] });
+await bot.start({ allowed_updates: ["message", "callback_query", "my_chat_member", "chat_join_request"] });

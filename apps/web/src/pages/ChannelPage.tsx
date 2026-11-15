@@ -5,7 +5,63 @@ import { date, durationLabel, som } from "../lib/format";
 import { haptic } from "../lib/telegram";
 import type { PublicChannel, PublicPlan } from "../lib/types";
 import { useApi } from "../lib/useApi";
-import { Avatar, Button, Card, ErrorBox, Field, Icon, SectionTitle, Spinner, Toggle } from "../components/ui";
+import { Avatar, Button, Card, ErrorBox, Field, Icon, SectionTitle, Sheet, Spinner, Toggle } from "../components/ui";
+
+const REASONS: [string, string][] = [
+  ["adult", "18+ yoki fahsh kontent"],
+  ["violence", "Zo'ravonlik, urush yoki terrorizm targ'iboti"],
+  ["fraud", "Firibgarlik"],
+  ["drugs", "Giyohvand moddalar yoki qimor"],
+  ["copyright", "O'g'irlangan kontent"],
+  ["other", "Boshqa"],
+];
+
+/** A subscriber reports the channel to the platform. */
+function ReportSheet({ slug, open, onClose }: { slug: string; open: boolean; onClose: () => void }) {
+  const [reason, setReason] = useState<string | null>(null);
+  const [note, setNote] = useState("");
+  const [state, setState] = useState<"idle" | "busy" | "sent">("idle");
+  const [err, setErr] = useState<string | null>(null);
+  const send = async () => {
+    setState("busy");
+    setErr(null);
+    try {
+      await api(`/api/channels/${slug}/report`, { body: { reason, note } });
+      setState("sent");
+    } catch (e) {
+      setErr((e as Error).message);
+      setState("idle");
+    }
+  };
+  return (
+    <Sheet open={open} onClose={onClose} title="Shikoyat qilish">
+      {state === "sent" ? (
+        <>
+          <p className="text-sm leading-relaxed text-muted">Rahmat. Shikoyatingiz platforma moderatoriga yuborildi va ko'rib chiqiladi.</p>
+          <Button size="lg" onClick={onClose}>Yopish</Button>
+        </>
+      ) : (
+        <>
+          <div className="flex flex-col gap-2" role="radiogroup" aria-label="Sabab">
+            {REASONS.map(([k, label]) => (
+              <button key={k} role="radio" aria-checked={reason === k} onClick={() => setReason(k)}
+                className={`rounded-xl border-2 bg-surface px-4 py-3 text-left text-sm ${reason === k ? "border-accent" : "border-transparent"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <label className="flex flex-col gap-1 rounded-xl bg-surface px-4 py-3 text-xs text-muted focus-within:ring-2 focus-within:ring-accent">
+            Izoh (ixtiyoriy)
+            <textarea maxLength={500} value={note} onChange={(e) => setNote(e.target.value)}
+              className="min-h-20 bg-transparent text-[15px] text-ink outline-none" placeholder="Nima ko'rdingiz?" />
+          </label>
+          {err && <p role="alert" className="text-sm text-warn">{err}</p>}
+          <Button size="lg" disabled={!reason || state === "busy"} onClick={send}>{state === "busy" ? "Yuborilmoqda…" : "Yuborish"}</Button>
+        </>
+      )}
+    </Sheet>
+  );
+}
 
 type PromoQuote = { code: string; planId: number; listPrice: number; discount: number; price: number };
 
@@ -37,6 +93,7 @@ export default function ChannelPage() {
   const [promoErr, setPromoErr] = useState<string | null>(null);
   const [promoBusy, setPromoBusy] = useState(false);
   const [promoTry, setPromoTry] = useState(0);
+  const [reporting, setReporting] = useState(false);
   const planId = data ? (picked ?? data.plans[1]?.id ?? data.plans[0]?.id ?? null) : null;
 
   // The discount depends on the plan (a code can be limited to one), so re-check it when the plan changes.
@@ -175,6 +232,10 @@ export default function ChannelPage() {
                 <div key={t} className="flex items-center gap-3 px-4 py-3 text-sm"><Icon name={i!} className="text-accent" size={18} />{t}</div>
               ))}
             </Card>
+            {!channel.canSell && (
+              <p className="rounded-xl bg-warn-soft px-4 py-3 text-sm text-warn">Bu kanal hozircha obuna qabul qilmayapti.</p>
+            )}
+            <button className="self-center py-2 text-xs text-muted underline" onClick={() => setReporting(true)}>Shikoyat qilish</button>
           </>
         )}
 
@@ -226,7 +287,7 @@ export default function ChannelPage() {
 
       <footer className="fixed inset-x-0 bottom-0 border-t border-line bg-bg/90 px-4 pb-6 pt-3 backdrop-blur">
         <div className="mx-auto max-w-md">
-          {step.kind === "plans" && plan && (
+          {step.kind === "plans" && plan && channel.canSell && (
             <div className="flex flex-col gap-2">
               <Button size="lg" className="w-full" onClick={() => setStep({ kind: "card" })}>Obuna bo'lish · {som(price)}</Button>
               {channel.trialDays > 0 && (
@@ -252,6 +313,7 @@ export default function ChannelPage() {
           {step.kind === "done" && <Button size="lg" className="w-full" onClick={() => (window as any).Telegram?.WebApp?.close?.()}>Botga qaytish</Button>}
         </div>
       </footer>
+      <ReportSheet slug={channel.slug} open={reporting} onClose={() => setReporting(false)} />
     </div>
   );
 }

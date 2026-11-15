@@ -1,6 +1,6 @@
 import { Bot, InlineKeyboard } from "grammy";
 import {
-  createDefaultPlans, deactivateChannelByChatId, getChannelBySlug, hasActiveAccess, listPlans, registerChannel,
+  acceptRules, getOwnerByTgId, screenChannel, createDefaultPlans, deactivateChannelByChatId, getChannelBySlug, hasActiveAccess, listPlans, registerChannel,
   upsertOwner, AppError, type Sql,
 } from "@obuna/core";
 import { webAppButton } from "@obuna/telegram";
@@ -11,7 +11,20 @@ export interface BotDeps {
   botUsername: string;
   /** Monthly price (tiyin) for the starter plans of a newly connected channel. */
   defaultMonthlyPrice: number;
+  /** Telegram ids of platform operators: moderation alerts and the support inbox. */
+  platformAdminIds?: number[];
 }
+
+/** The rules an owner accepts before selling. Kept short; the full text is on /rules in the Mini App. */
+export const RULES_SUMMARY =
+  "Obuna orqali quyidagilarni sotish taqiqlanadi:\n" +
+  "• 18+ va fahsh kontent\n" +
+  "• zo'ravonlik, urush, terrorizm va ekstremizm targ'iboti, millatlararo adovat\n" +
+  "• firibgarlik: «kafolatli daromad», soxta kurslar, piramidalar\n" +
+  "• giyohvand moddalar, qimor va tikish\n" +
+  "• o'zganing kontenti (o'g'irlangan kurslar, kinolar)\n" +
+  "• O'zbekiston qonunlari taqiqlagan boshqa kontent\n\n" +
+  "Qoidabuzarlikda platforma kanalni bloklaydi, pul yechishni to'xtatadi va obunachilarga pulni qaytarishi mumkin.";
 
 // Channels have no "ban users" toggle in Telegram's admin UI (can_restrict_members stays false even with
 // every right granted), so only the invite right is required. Removing expired members is best effort.
@@ -41,6 +54,9 @@ export function splitStartPayload(payload: string): [string, string | null] {
 
 export function registerHandlers(bot: Bot, d: BotDeps) {
   const app = (path: string) => `${d.webAppUrl}${path}`;
+  const admins = d.platformAdminIds ?? [];
+  const tellAdmins = (text: string, extra?: Parameters<Bot["api"]["sendMessage"]>[2]) =>
+    Promise.allSettled(admins.map((id) => bot.api.sendMessage(id, text, extra)));
 
   bot.command("start", async (ctx) => {
     const payload = ctx.match?.trim();
@@ -82,6 +98,7 @@ export function registerHandlers(bot: Bot, d: BotDeps) {
     ctx.reply(
       "Kanal egalari uchun: botni kanalingizga admin qiling («Foydalanuvchilarni taklif qilish» huquqi bilan). " +
         "Guruh uchun «Havola orqali taklif qilish» va «Bloklash» huquqlari kerak. " +
+        "Savol yoki shikoyat bo'lsa, shu yerga oddiy xabar yozing, qo'llab-quvvatlashga boradi. " +
         "Kassa avtomatik ochiladi, tariflarni paneldan sozlaysiz.\n\nObunachilar uchun: /obunam",
     ),
   );
@@ -136,10 +153,49 @@ export function registerHandlers(bot: Bot, d: BotDeps) {
           `Obunachilar uchun havola: https://t.me/${d.botUsername}?startapp=${channel.slug}`,
         { reply_markup: webAppButton("Panelni ochish", app("/owner")) },
       );
+      if (!channel.rules_accepted_at)
+        await ctx.api.sendMessage(from.id, `Obuna sotishni boshlash uchun platforma qoidalariga rozilik bering.\n\n${RULES_SUMMARY}`, {
+          reply_markup: new InlineKeyboard().text("✅ Qoidalarga roziman", `rules:${channel.id}`).row().webApp("To'liq qoidalar", app("/rules")),
+        });
+      const words = await screenChannel(d.sql, channel.id);
+      if (words) await tellAdmins(`🔎 Yangi «${channel.title}» tekshiruvga tushdi (${words.join(", ")}). Platforma panelida ko'rib chiqing.`);
     } catch (e) {
       if (e instanceof AppError) await ctx.api.sendMessage(from.id, e.message).catch(() => {});
       else throw e;
     }
+  });
+
+  // The owner accepts the platform rules from the button under the connect message.
+  bot.callbackQuery(/^rules:(\d+)$/, async (ctx) => {
+    const owner = await getOwnerByTgId(d.sql, ctx.from.id);
+    if (!owner) return ctx.answerCallbackQuery({ text: "Kanal topilmadi" });
+    try {
+      const ch = await acceptRules(d.sql, owner.id, Number(ctx.match[1]));
+      await ctx.answerCallbackQuery({ text: "Rahmat! Obuna sotish yoqildi." });
+      await ctx.editMessageText(`✅ «${ch.title}» uchun platforma qoidalariga rozilik berdingiz. Obuna sotish yoqildi.`).catch(() => {});
+    } catch {
+      await ctx.answerCallbackQuery({ text: "Kanal topilmadi" });
+    }
+  });
+
+  // Support inbox: a private text that is not a command goes to the platform operators.
+  // An operator answers by replying to that message; the bot sends the answer back.
+  bot.on("message:text", async (ctx, next) => {
+    if (ctx.chat.type !== "private" || ctx.message.text.startsWith("/")) return next();
+    const reply = ctx.message.reply_to_message;
+    if (admins.includes(ctx.from.id) && reply?.from?.id === ctx.me.id) {
+      const to = reply.text?.match(/\(id (\d+)\)/)?.[1];
+      if (to) {
+        await ctx.api.sendMessage(Number(to), `💬 Qo'llab-quvvatlash: ${ctx.message.text}`);
+        await ctx.reply("Yuborildi.");
+        return;
+      }
+    }
+    if (!admins.length) return next();
+    const name = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ");
+    const handle = ctx.from.username ? ` @${ctx.from.username}` : "";
+    await tellAdmins(`💬 ${name}${handle} (id ${ctx.from.id}):\n${ctx.message.text.slice(0, 3500)}\n\nJavob uchun shu xabarga reply qiling.`);
+    await ctx.reply("Xabaringiz qo'llab-quvvatlashga yuborildi. Javob shu yerga keladi.");
   });
 
   // Channels using "request to join" links: approve only paying members.

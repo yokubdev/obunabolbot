@@ -1,7 +1,7 @@
 export interface PublicPlan { id: number; title: string; durationDays: number; price: number }
 export interface PublicChannel {
   id: number; title: string; slug: string; description: string; subscribers: number;
-  perks: string[]; trialDays: number; chatType: "channel" | "supergroup"; photoUrl: string;
+  perks: string[]; trialDays: number; chatType: "channel" | "supergroup"; photoUrl: string; canSell: boolean;
 }
 export interface MySub {
   id: number; status: "active" | "expired"; expires_at: string; auto_renew: boolean;
@@ -10,6 +10,7 @@ export interface MySub {
 export interface OwnerChannel {
   id: number; title: string; slug: string; description: string; is_active: boolean; link: string;
   perks: string[]; welcome_text: string; trial_days: number; chat_type: "channel" | "supergroup";
+  moderation: "pending" | "active" | "blocked"; moderation_reason: string | null; rules_accepted_at: string | null;
 }
 export interface Wallet { available: number; pending: number; commissionThisMonth: number }
 export interface Stats {
@@ -33,4 +34,10 @@ export interface Me { user: { id: number; first_name: string }; isOwner: boolean
 export interface Promo {
   id: number; channel_id: number; code: string; kind: "percent" | "amount"; value: number; plan_id: number | null;
   max_uses: number | null; used_count: number; expires_at: string | null; is_active: boolean; created_at: string;
+}
+
+export interface ModerationRow {
+  id: number; title: string; slug: string; moderation: "pending" | "active" | "blocked"; moderation_reason: string | null;
+  owner_name: string; owner_tg_id: number; created_at: string; open_reports: number;
+  reports: { reason: string; note: string; created_at: string }[];
 }

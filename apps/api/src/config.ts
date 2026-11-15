@@ -8,6 +8,8 @@ export interface AppConfig {
   port: number;
   commissionBps: number;
   holdHours: number;
+  /** Payout hold for channels younger than 14 days. */
+  newChannelHoldHours: number;
   devAuth: boolean;
   platformAdminIds: number[];
   webhookSecret: string;
@@ -44,6 +46,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     port: Number(env.PORT ?? env.API_PORT ?? 3000),
     commissionBps: Number(env.COMMISSION_BPS ?? 1000),
     holdHours: Number(env.HOLD_HOURS ?? 24),
+    newChannelHoldHours: Number(env.NEW_CHANNEL_HOLD_HOURS ?? 168),
     devAuth: env.DEV_AUTH === "true",
     webhookSecret: env.WEBHOOK_SECRET ?? "",
     jobsSecret: env.JOBS_SECRET ?? "",

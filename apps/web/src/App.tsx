@@ -8,6 +8,7 @@ import Subscribers from "./pages/owner/Subscribers";
 import Plans from "./pages/owner/Plans";
 import Kassa from "./pages/owner/Kassa";
 import Platform from "./pages/Platform";
+import Rules from "./pages/Rules";
 
 /** t.me/<bot>?startapp=<slug>[_<PROMO>] opens the Mini App root with start_param set: one tap to the channel page. */
 function Home() {
@@ -33,6 +34,7 @@ export default function App() {
         <Route path="kassa" element={<Kassa />} />
       </Route>
       <Route path="/platform" element={<Platform />} />
+      <Route path="/rules" element={<Rules />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

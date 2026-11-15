@@ -3,7 +3,8 @@ import {
   claimDueRenewals, claimPaymentForConfirm, claimReminders, confirmPayment, createDb, createPayment, createPlan, decryptCard,
   encryptCard, expireDue, getWallet, hasActiveAccess, markPaymentPendingOtp, markWithdrawalPaid, MAX_OTP_ATTEMPTS, migrate,
   registerChannel, rejectWithdrawal, releasePaymentClaim, requestWithdrawal, upsertOwner, upsertSubscriber, assertCheckoutRate,
-  updateChannel, createPlan as addPlan, createPromo, resolvePromo, listPromos, setPromoActive, getPlan, startTrial, type Sql,
+  updateChannel, createPlan as addPlan, createPromo, resolvePromo, listPromos, setPromoActive, getPlan, startTrial, acceptRules, screenText, screenChannel, reportChannel, setModeration, listModeration,
+  type Sql,
 } from "../src/index.js";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -36,7 +37,7 @@ d("virtual cashbox", () => {
 
   async function setup() {
     const owner = await upsertOwner(sql, { id: 111, first_name: "Jasur" });
-    const channel = await registerChannel(sql, owner.id, { id: -1001, title: "Fitness Akademiya" });
+    const channel = await acceptRules(sql, owner.id, (await registerChannel(sql, owner.id, { id: -1001, title: "Fitness Akademiya" })).id);
     const plan = await createPlan(sql, owner.id, channel.id, { title: "1 oy", duration_days: 30, price: 4_900_000 });
     const sub = await upsertSubscriber(sql, { id: 222, first_name: "Aziz" });
     return { owner, channel, plan, sub };
@@ -248,5 +249,64 @@ d("virtual cashbox", () => {
     const { owner } = await setup();
     const g = await registerChannel(sql, owner.id, { id: -1009, title: "Yopiq guruh", type: "supergroup" });
     expect(g.chat_type).toBe("supergroup");
+  });
+
+  it("does not sell before the owner accepts the rules", async () => {
+    const owner = await upsertOwner(sql, { id: 111, first_name: "Jasur" });
+    const ch = await registerChannel(sql, owner.id, { id: -1005, title: "Yangi" });
+    const plan = await createPlan(sql, owner.id, ch.id, { title: "1 oy", duration_days: 30, price: 4_900_000 });
+    const sub = await upsertSubscriber(sql, { id: 222, first_name: "Aziz" });
+    await expect(createPayment(sql, { subscriberId: sub.id, planId: plan.id, provider: "mock", autoRenew: false })).rejects.toThrow(/rozilik/);
+    const stranger = await upsertOwner(sql, { id: 999, first_name: "X" });
+    await expect(acceptRules(sql, stranger.id, ch.id)).rejects.toThrow();
+    await acceptRules(sql, owner.id, ch.id);
+    await createPayment(sql, { subscriberId: sub.id, planId: plan.id, provider: "mock", autoRenew: false });
+  });
+
+  it("screens texts by word start in Latin, Cyrillic and Russian", () => {
+    expect(screenText("Fitness va sog'lom ovqat").words).toEqual([]);
+    expect(screenText("Essex football club").words).toEqual([]);
+    expect(screenText("Eksklyuziv 18+ video").reasons).toEqual(["adult"]);
+    expect(screenText("Порно каналы").reasons).toEqual(["adult"]);
+    expect(screenText("Kafolatli daromad har kuni").reasons).toEqual(["fraud"]);
+    expect(screenText("Лучшие ставки на спорт").reasons).toEqual(["drugs"]);
+  });
+
+  it("sends flagged or reported channels to review, freezes payouts and blocks sales when blocked", async () => {
+    const { owner, channel, plan, sub } = await setup();
+    await pay(sub.id, plan.id);
+    await updateChannel(sql, owner.id, channel.id, { description: "Eng zo'r 18+ kontent" });
+    expect(await screenChannel(sql, channel.id)).toEqual(["18+"]);
+    await expect(requestWithdrawal(sql, owner.id, 1_000_000, "8600123456784417", KEY)).rejects.toThrow(/tekshiruvda/);
+    // Still sells while in review.
+    await createPayment(sql, { subscriberId: sub.id, planId: plan.id, provider: "mock", autoRenew: false });
+    await setModeration(sql, channel.id, "active", null);
+    expect(await screenChannel(sql, channel.id)).toBeNull(); // approved words do not flag again
+    await updateChannel(sql, owner.id, channel.id, { description: "Eng zo'r 18+ kontent, kazino" });
+    expect(await screenChannel(sql, channel.id)).toEqual(["kazino"]);
+    await setModeration(sql, channel.id, "active", null);
+    await requestWithdrawal(sql, owner.id, 1_000_000, "8600123456784417", KEY);
+
+    const subs = await Promise.all([301, 302, 303].map((id) => upsertSubscriber(sql, { id, first_name: "S" })));
+    expect((await reportChannel(sql, channel.id, subs[0]!.id, "fraud", "")).sentToReview).toBe(false);
+    await reportChannel(sql, channel.id, subs[0]!.id, "fraud", "yana"); // a repeat does not count twice
+    await reportChannel(sql, channel.id, subs[1]!.id, "adult", "");
+    expect((await reportChannel(sql, channel.id, subs[2]!.id, "other", "")).sentToReview).toBe(true);
+    const [row] = await listModeration(sql);
+    expect(row!.open_reports).toBe(3);
+
+    await setModeration(sql, channel.id, "blocked", "Firibgarlik");
+    await expect(createPayment(sql, { subscriberId: sub.id, planId: plan.id, provider: "mock", autoRenew: false })).rejects.toThrow(/qabul qilmayapti/);
+    const [s] = await sql`SELECT auto_renew FROM subscriptions WHERE channel_id = ${channel.id}`;
+    expect(s!.auto_renew).toBe(false);
+    await expect(requestWithdrawal(sql, owner.id, 1_000_000, "8600123456784417", KEY)).rejects.toThrow(/bloklangan/);
+  });
+
+  it("holds money longer for new channels", async () => {
+    const { owner, plan, sub } = await setup();
+    await pay(sub.id, plan.id, { commissionBps: 1000, holdHours: 0, newChannelHoldHours: 168 });
+    const w = await getWallet(sql, owner.id);
+    expect(w.available).toBe(0);
+    expect(w.pending).toBe(4_410_000);
   });
 });

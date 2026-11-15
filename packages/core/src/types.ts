@@ -11,6 +11,8 @@ export interface Channel {
   id: number; owner_id: number; tg_chat_id: number; title: string; slug: string;
   description: string; is_active: boolean; created_at: Date;
   perks: string[]; welcome_text: string; trial_days: number; chat_type: "channel" | "supergroup";
+  moderation: "pending" | "active" | "blocked"; moderation_reason: string | null; rules_accepted_at: Date | null;
+  reviewed_words: string[];
 }
 export interface Plan {
   id: number; channel_id: number; title: string; duration_days: number; price: number;

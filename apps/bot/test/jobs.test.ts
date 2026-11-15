@@ -2,8 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Api } from "grammy";
 import {
   confirmPayment, createDb, createPayment, createPlan, getWallet, migrate, registerChannel, upsertOwner, upsertSubscriber,
-  type Sql,
-} from "@obuna/core";
+  type Sql, acceptRules } from "@obuna/core";
 import { MockProvider } from "@obuna/atmos";
 import { runJobs } from "../src/jobs.js";
 
@@ -29,6 +28,7 @@ d("scheduler", () => {
   it("renews saved cards, reminds, and removes unpaid members", async () => {
     const owner = await upsertOwner(sql, { id: 1, first_name: "Owner" });
     const ch = await registerChannel(sql, owner.id, { id: -100, title: "Kanal" });
+    await acceptRules(sql, owner.id, ch.id);
     const plan = await createPlan(sql, owner.id, ch.id, { title: "1 oy", duration_days: 30, price: 1_000_000 });
     const renewing = await upsertSubscriber(sql, { id: 10, first_name: "Auto" });
     const lapsing = await upsertSubscriber(sql, { id: 20, first_name: "Manual" });
@@ -54,6 +54,7 @@ d("scheduler", () => {
   it("never auto-renews at a changed price", async () => {
     const owner = await upsertOwner(sql, { id: 2, first_name: "Owner2" });
     const ch = await registerChannel(sql, owner.id, { id: -200, title: "Kanal 2" });
+    await acceptRules(sql, owner.id, ch.id);
     const plan = await createPlan(sql, owner.id, ch.id, { title: "1 oy", duration_days: 30, price: 1_000_000 });
     const s = await upsertSubscriber(sql, { id: 30, first_name: "Auto2" });
     const { payment } = await createPayment(sql, { subscriberId: s.id, planId: plan.id, provider: "mock", autoRenew: true });

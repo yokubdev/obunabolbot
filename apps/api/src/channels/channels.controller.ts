@@ -1,7 +1,17 @@
-import { Controller, Get, Inject, Param, Res } from "@nestjs/common";
+import { Body, Controller, Get, Inject, Param, Post, Res, UseGuards } from "@nestjs/common";
+import { z } from "zod";
 import type { Response } from "express";
 import type { Api } from "grammy";
-import { getChannelBySlug, listPlans, type Sql } from "@obuna/core";
+import {
+  getChannelBySlug, listPlans, REPORT_LABELS, REPORT_REASONS, reportChannel, upsertSubscriber, type Sql, type TgUser,
+} from "@obuna/core";
+import { CurrentUser, TelegramAuthGuard } from "../common/auth.js";
+import { notifyAdmins } from "../common/notify.js";
+
+const ReportBody = z.object({
+  reason: z.enum(REPORT_REASONS as [string, ...string[]]),
+  note: z.string().trim().max(500).default(""),
+}).strict();
 import { CONFIG, SQL, TG_API } from "../tokens.js";
 import type { AppConfig } from "../config.js";
 
@@ -30,9 +40,25 @@ export class ChannelsController {
       channel: {
         id: ch.id, title: ch.title, slug: ch.slug, description: ch.description, subscribers: count,
         perks: ch.perks, trialDays: ch.trial_days, chatType: ch.chat_type, photoUrl: `/api/channels/${ch.slug}/photo`,
+        canSell: ch.moderation !== "blocked" && !!ch.rules_accepted_at,
       },
       plans: plans.map((p) => ({ id: p.id, title: p.title, durationDays: p.duration_days, price: p.price })),
     };
+  }
+
+  /** A subscriber reports the channel; three open reports send it back to review. */
+  @Post(":slug/report")
+  @UseGuards(TelegramAuthGuard)
+  async report(@Param("slug") slug: string, @CurrentUser() user: TgUser, @Body() body: unknown) {
+    const b = ReportBody.parse(body);
+    const ch = await getChannelBySlug(this.sql, slug);
+    const sub = await upsertSubscriber(this.sql, user);
+    const r = await reportChannel(this.sql, ch.id, sub.id, b.reason as keyof typeof REPORT_LABELS, b.note);
+    await notifyAdmins(this.tg, this.cfg.platformAdminIds,
+      `🚩 «${ch.title}» ustidan shikoyat: ${REPORT_LABELS[b.reason as keyof typeof REPORT_LABELS]}` +
+        (b.note ? `\n«${b.note}»` : "") +
+        `\nOchiq shikoyatlar: ${r.openReports}${r.sentToReview ? ". Kanal tekshiruvga tushdi." : ""}`);
+    return { ok: true };
   }
 
   /** The channel's Telegram avatar, proxied so the bot token never reaches the browser. */

@@ -1,12 +1,14 @@
 import { Body, Controller, Get, Inject, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { z } from "zod";
 import {
-  createPlan, createPromo, getOwnedChannel, listPromos, setPromoActive, getOwnerStats, getWallet, listLedger, listOwnerChannels, listOwnerSubscribers,
+  acceptRules, screenChannel, createPlan, createPromo, getOwnedChannel, listPromos, setPromoActive, getOwnerStats, getWallet, listLedger, listOwnerChannels, listOwnerSubscribers,
   listPlans, listWithdrawals, requestWithdrawal, updateChannel, updatePlan, type Owner, type OwnerSubFilter, type Sql,
   type Withdrawal,
 } from "@obuna/core";
 import { CurrentOwner, OwnerGuard, TelegramAuthGuard } from "../common/auth.js";
-import { CONFIG, SQL } from "../tokens.js";
+import { CONFIG, SQL, TG_API } from "../tokens.js";
+import { notifyAdmins } from "../common/notify.js";
+import type { Api } from "grammy";
 import type { AppConfig } from "../config.js";
 
 const PlanBody = z.object({
@@ -48,7 +50,11 @@ const publicWithdrawal = (w: Withdrawal) => ({
 @Controller("api/owner")
 @UseGuards(TelegramAuthGuard, OwnerGuard)
 export class OwnerController {
-  constructor(@Inject(SQL) private readonly sql: Sql, @Inject(CONFIG) private readonly cfg: AppConfig) {}
+  constructor(
+    @Inject(SQL) private readonly sql: Sql,
+    @Inject(CONFIG) private readonly cfg: AppConfig,
+    @Inject(TG_API) private readonly tg: Api,
+  ) {}
 
   @Get("overview")
   async overview(@CurrentOwner() owner: Owner) {
@@ -113,8 +119,19 @@ export class OwnerController {
   }
 
   @Patch("channels/:id")
-  patchChannel(@CurrentOwner() owner: Owner, @Param("id", ParseIntPipe) id: number, @Body() body: unknown) {
-    return updateChannel(this.sql, owner.id, id, ChannelPatchStrict.parse(body));
+  async patchChannel(@CurrentOwner() owner: Owner, @Param("id", ParseIntPipe) id: number, @Body() body: unknown) {
+    const ch = await updateChannel(this.sql, owner.id, id, ChannelPatchStrict.parse(body));
+    const words = await screenChannel(this.sql, id);
+    if (!words) return ch;
+    await notifyAdmins(this.tg, this.cfg.platformAdminIds,
+      `🔎 «${ch.title}» tekshiruvga tushdi (${words.join(", ")}). Platforma panelida ko'rib chiqing.`);
+    return getOwnedChannel(this.sql, owner.id, id);
+  }
+
+  /** The owner accepts the platform rules; sales start only after this. */
+  @Post("channels/:id/accept-rules")
+  accept(@CurrentOwner() owner: Owner, @Param("id", ParseIntPipe) id: number) {
+    return acceptRules(this.sql, owner.id, id);
   }
 
   @Get("wallet")

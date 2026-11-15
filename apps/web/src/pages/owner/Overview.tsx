@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { MONTHS, som, somShort } from "../../lib/format";
-import { BarChart, Button, Card, Field, Icon, SectionTitle, Sheet, Stat, Avatar } from "../../components/ui";
+import { Badge, BarChart, Button, Card, Field, Icon, SectionTitle, Sheet, Stat, Avatar } from "../../components/ui";
 import { api } from "../../lib/api";
 import type { OwnerChannel } from "../../lib/types";
 import type { OwnerCtx } from "./OwnerLayout";
@@ -22,6 +22,32 @@ export default function Overview() {
           <h1 className="text-2xl font-bold tracking-tight md:text-3xl">{o.owner.name}</h1>
         </div>
       </header>
+
+      {o.channels.filter((c) => !c.rules_accepted_at).map((c) => (
+        <Card key={`rules-${c.id}`} className="flex flex-col gap-3 border border-warn/40 p-5">
+          <span className="font-semibold">«{c.title}» uchun obuna sotish hali yoqilmagan</span>
+          <span className="text-sm leading-relaxed text-muted">
+            Platforma qoidalariga rozilik bering: 18+, zo'ravonlik va urush targ'iboti, firibgarlik, giyohvand moddalar, qimor
+            va o'zganing kontentini sotish taqiqlanadi.{" "}
+            <Link to="/rules" className="text-accent underline">To'liq qoidalar</Link>
+          </span>
+          <Button className="self-start" onClick={async () => { await api(`/api/owner/channels/${c.id}/accept-rules`, { body: {} }); void reload(); }}>
+            Qoidalarga roziman
+          </Button>
+        </Card>
+      ))}
+      {o.channels.filter((c) => c.moderation !== "active").map((c) => (
+        <Card key={`mod-${c.id}`} className="flex flex-col gap-1 bg-warn-soft p-5">
+          <span className="font-semibold text-warn">
+            «{c.title}» {c.moderation === "blocked" ? "bloklangan" : "tekshiruvda"}
+          </span>
+          <span className="text-sm leading-relaxed text-ink/80">
+            {c.moderation === "blocked"
+              ? `Sabab: ${c.moderation_reason ?? "qoidabuzarlik"}. Obuna sotish va pul yechish to'xtatilgan. E'tiroz bo'lsa, botga xabar yozing.`
+              : "Moderator kanalni ko'rib chiqmoqda. Obuna sotilaveradi, tekshiruv tugaguncha pul yechib bo'lmaydi."}
+          </span>
+        </Card>
+      ))}
 
       <Card className="relative overflow-hidden bg-accent-soft p-5 md:p-6">
         <div className="flex flex-wrap items-end justify-between gap-4">
@@ -57,7 +83,11 @@ export default function Overview() {
             <div key={c.id} className="flex flex-wrap items-center gap-3 p-4">
               <Avatar name={c.title} seed={c.id} size={40} src={`/api/channels/${c.slug}/photo`} />
               <div className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate font-semibold">{c.title}</span>
+                <span className="flex items-center gap-2 truncate font-semibold">
+                  {c.title}
+                  {c.moderation === "pending" && <Badge tone="warn">Tekshiruvda</Badge>}
+                  {c.moderation === "blocked" && <Badge tone="warn">Bloklangan</Badge>}
+                </span>
                 <span className="truncate text-xs text-muted">{c.link}</span>
               </div>
               <Button variant="soft" onClick={() => { void navigator.clipboard?.writeText(c.link); setCopied(c.id); }}>

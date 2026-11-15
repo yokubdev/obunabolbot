@@ -3,6 +3,7 @@ import { AppError, notFound } from "./errors.js";
 import { commissionFor } from "./money.js";
 import { getChannel, getPlan } from "./channels.js";
 import { resolvePromo, type AppliedPromo } from "./promos.js";
+import { assertCanSell, NEW_CHANNEL_DAYS } from "./moderation.js";
 import type { Channel, Payment, Plan, Subscription } from "./types.js";
 
 export interface LedgerConfig {
@@ -10,6 +11,8 @@ export interface LedgerConfig {
   commissionBps: number;
   /** Hours before a payment becomes withdrawable (refund/chargeback window). */
   holdHours: number;
+  /** Longer hold for channels younger than NEW_CHANNEL_DAYS, while they have no track record. */
+  newChannelHoldHours?: number;
 }
 
 export async function createPayment(
@@ -19,7 +22,7 @@ export async function createPayment(
   const plan = await getPlan(sql, args.planId);
   if (!plan.is_active) throw new AppError("plan_inactive", "Bu tarif hozir sotilmayapti");
   const channel = await getChannel(sql, plan.channel_id);
-  if (!channel.is_active) throw new AppError("channel_inactive", "Kanal hozir obuna qabul qilmayapti");
+  assertCanSell(channel);
   const promo = args.promoCode ? await resolvePromo(sql, plan, args.promoCode, args.subscriberId) : null;
   const [payment] = await sql<Payment[]>`
     INSERT INTO payments (subscriber_id, channel_id, plan_id, amount, list_price, promo_code_id, provider, status, auto_renew)
@@ -169,7 +172,9 @@ export async function confirmPayment(
       await tx`UPDATE promo_codes SET used_count = used_count + 1 WHERE id = ${payment.promo_code_id}`;
 
     const commission = commissionFor(payment.amount, cfg.commissionBps);
-    const availableAt = new Date(Date.now() + cfg.holdHours * 3600_000);
+    const isNew = channel!.created_at.getTime() > Date.now() - NEW_CHANNEL_DAYS * 86400_000;
+    const hold = isNew ? Math.max(cfg.holdHours, cfg.newChannelHoldHours ?? 0) : cfg.holdHours;
+    const availableAt = new Date(Date.now() + hold * 3600_000);
     await tx`
       INSERT INTO ledger_entries (owner_id, amount, type, payment_id, available_at)
       VALUES (${channel!.owner_id}, ${payment.amount}, 'payment', ${paymentId}, ${availableAt})`;
