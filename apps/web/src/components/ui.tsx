@@ -1,5 +1,5 @@
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(" ");
 
@@ -128,6 +128,13 @@ export function ErrorBox({ error, onRetry }: { error: Error; onRetry?: () => voi
 }
 
 export function Sheet({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
+  // The page behind must not scroll while the sheet is open, or the touch goes to the wrong layer.
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, [open]);
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 sm:items-center" onClick={onClose}>
@@ -136,15 +143,18 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
         aria-modal="true"
         aria-label={title}
         onClick={(e) => e.stopPropagation()}
-        className="flex w-full max-w-md flex-col gap-4 rounded-t-3xl bg-bg p-5 pb-8 sm:rounded-3xl"
+        className="flex max-h-[92dvh] w-full max-w-md flex-col rounded-t-3xl bg-bg sm:rounded-3xl"
       >
-        <div className="flex items-center justify-between">
+        <div className="flex shrink-0 items-center justify-between px-5 pb-2 pt-4">
           <h3 className="text-lg font-bold">{title}</h3>
           <button aria-label="Yopish" onClick={onClose} className="flex size-11 items-center justify-center rounded-full hover:bg-raised">
             <Icon name="x" />
           </button>
         </div>
-        {children}
+        {/* The body scrolls on its own, so every field is reachable on short phones and with the keyboard open. */}
+        <div className="flex min-h-0 flex-col gap-4 overflow-y-auto overscroll-contain px-5 [&>*]:shrink-0 pb-[max(2rem,env(safe-area-inset-bottom))]">
+          {children}
+        </div>
       </div>
     </div>
   );
