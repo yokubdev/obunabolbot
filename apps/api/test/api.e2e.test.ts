@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Test } from "@nestjs/testing";
 import type { INestApplication } from "@nestjs/common";
 import request from "supertest";
-import { createDb, migrate, registerChannel, createPlan, upsertOwner, type Sql, acceptRules } from "@obuna/core";
+import { createDb, migrate, registerChannel, createPlan, upsertOwner, type Sql, acceptRules, setOwnerPhone } from "@obuna/core";
 import { signInitData } from "@obuna/telegram";
 import { AppModule } from "../src/app.module.js";
 import { loadConfig } from "../src/config.js";
@@ -81,11 +81,31 @@ d("API end to end (mock ATMOS, fake Telegram)", () => {
     expect(ov.body.wallet.available).toBe(4_410_000);
     expect(ov.body.stats.activeSubscribers).toBe(1);
 
+    // First withdrawal: the payout profile comes first.
     await http.post("/api/owner/withdrawals").set("Authorization", as(111))
-      .send({ amount: 9_000_000, cardNumber: "9860123456784417" }).expect(400);
+      .send({ amount: 4_000_000, cardNumber: "9860123456784417" }).expect(400); // under 100 000 so'm
+    const [{ id: chId, owner_id: ownerId }] = await sql`SELECT id, owner_id FROM channels WHERE slug = 'fitness-akademiya'`;
+    const yearly = await createPlan(sql, ownerId, chId, { title: "1 yil", duration_days: 365, price: 49_000_000 });
+    const start2 = await http.post("/api/checkout").set("Authorization", as(222, "Aziz"))
+      .send({ planId: yearly.id, autoRenew: false, cardNumber: "8600 1234 5678 4417", expiry: "09/28" }).expect(201);
+    await http.post(`/api/checkout/${start2.body.paymentId}/confirm`).set("Authorization", as(222, "Aziz")).send({ otp: "111111" }).expect(201);
+    const [offer] = await sql`SELECT offer_accepted_at FROM subscribers WHERE tg_id = 222`;
+    expect(offer!.offer_accepted_at).not.toBeNull();
+
+    const err = await http.post("/api/owner/withdrawals").set("Authorization", as(111))
+      .send({ amount: 40_000_000, cardNumber: "9860123456784417" }).expect(409);
+    expect(err.body.error.code).toBe("payout_profile_required");
+    await http.post("/api/owner/payout-profile").set("Authorization", as(111)).send({ legalStatus: "self_employed", acceptTerms: false }).expect(400);
+    let prof = await http.post("/api/owner/payout-profile").set("Authorization", as(111)).send({ legalStatus: "self_employed", acceptTerms: true }).expect(201);
+    expect(prof.body.complete).toBe(false); // no phone yet
+    await setOwnerPhone(sql, 111, "+998901234567"); // what the bot does when the owner shares the contact
+    prof = await http.get("/api/owner/payout-profile").set("Authorization", as(111)).expect(200);
+    expect(prof.body).toMatchObject({ complete: true, phone: "+998901234567", legalStatus: "self_employed", kyc: { status: "none" } });
+
     const w = await http.post("/api/owner/withdrawals").set("Authorization", as(111))
-      .send({ amount: 4_000_000, cardNumber: "9860123456784417" }).expect(201);
+      .send({ amount: 40_000_000, cardNumber: "9860123456784417" }).expect(201);
     expect(w.body.card_number).toBe("•••• 4417");
+    expect(w.body.payout_date).toBeTruthy();
 
     await http.get("/api/platform/withdrawals").set("Authorization", as(111)).expect(403);
     const pending = await http.get("/api/platform/withdrawals").set("Authorization", as(999)).expect(200);
@@ -93,9 +113,10 @@ d("API end to end (mock ATMOS, fake Telegram)", () => {
     // Only the platform operator sees the full card; the owner never gets the encrypted blob.
     expect(pending.body[0].card_number).toBe("9860123456784417");
     expect(pending.body[0].card_enc).toBeUndefined();
+    expect(pending.body[0]).toMatchObject({ owner_phone: "+998901234567", legal_status: "self_employed" });
     await http.post(`/api/platform/withdrawals/${w.body.id}/paid`).set("Authorization", as(999)).expect(201);
     const wallet = await http.get("/api/owner/wallet").set("Authorization", as(111)).expect(200);
-    expect(wallet.body.available).toBe(410_000);
+    expect(wallet.body.available).toBe(8_510_000);
     expect(wallet.body.withdrawals[0].status).toBe("paid");
     expect(JSON.stringify(wallet.body)).not.toMatch(/card_enc|9860123456784417/);
   });
@@ -218,8 +239,25 @@ d("API end to end (mock ATMOS, fake Telegram)", () => {
     await http.post(`/api/platform/channels/${row.id}/moderation`).set("Authorization", as(999)).send({ status: "blocked" }).expect(400);
     await http.post(`/api/platform/channels/${row.id}/moderation`).set("Authorization", as(999)).send({ status: "blocked", reason: "Firibgarlik" }).expect(201);
     await http.get("/api/channels/fitness-akademiya").expect(404);
-    await http.post("/api/owner/withdrawals").set("Authorization", as(111)).send({ amount: 1_000_000, cardNumber: "8600123456784417" }).expect(403);
+    await http.post("/api/owner/withdrawals").set("Authorization", as(111)).send({ amount: 10_000_000, cardNumber: "8600123456784417" }).expect(403);
     await http.post(`/api/platform/channels/${row.id}/moderation`).set("Authorization", as(999)).send({ status: "active" }).expect(201);
     await http.get("/api/channels/fitness-akademiya").expect(200);
+  });
+
+  it("runs the identity check through the platform operator (no MyID)", async () => {
+    const http = request(app.getHttpServer());
+    await http.post("/api/owner/kyc").set("Authorization", as(111)).send({ fullName: "Karimov Jasur", pinfl: "123" }).expect(400);
+    const sent = tg.sendMessage.mock.calls.length;
+    const k = await http.post("/api/owner/kyc").set("Authorization", as(111))
+      .send({ fullName: "Karimov Jasur Akmalovich", pinfl: "31234567890123" }).expect(201);
+    expect(k.body.kyc).toEqual({ status: "pending", fullName: "Karimov Jasur Akmalovich", pinfl: "••••••••••0123", note: null });
+    expect(tg.sendMessage.mock.calls.slice(sent).some((c) => c[0] === 999)).toBe(true);
+    await http.get("/api/platform/kyc").set("Authorization", as(111)).expect(403);
+    const q = await http.get("/api/platform/kyc").set("Authorization", as(999)).expect(200);
+    expect(q.body[0]).toMatchObject({ fullName: "Karimov Jasur Akmalovich", pinfl: "31234567890123" });
+    await http.post(`/api/platform/owners/${q.body[0].ownerId}/kyc`).set("Authorization", as(999)).send({ status: "rejected" }).expect(400);
+    await http.post(`/api/platform/owners/${q.body[0].ownerId}/kyc`).set("Authorization", as(999)).send({ status: "verified" }).expect(201);
+    const prof = await http.get("/api/owner/payout-profile").set("Authorization", as(111)).expect(200);
+    expect(prof.body.kyc.status).toBe("verified");
   });
 });

@@ -3,16 +3,26 @@ export interface TgUser {
   first_name: string;
   last_name?: string;
   username?: string;
+  language_code?: string;
 }
 
-export interface Owner { id: number; tg_id: number; name: string; username: string | null; created_at: Date }
-export interface Subscriber { id: number; tg_id: number; name: string; username: string | null; created_at: Date }
+export interface Owner {
+  id: number; tg_id: number; name: string; username: string | null; created_at: Date;
+  phone: string | null; legal_status: "self_employed" | "business" | "individual" | null;
+  business_tin: string | null; business_name: string | null; payout_terms_accepted_at: Date | null;
+  kyc_status: "none" | "pending" | "verified" | "rejected"; kyc_full_name: string | null; kyc_pinfl_enc: string | null;
+  kyc_note: string | null; kyc_submitted_at: Date | null; kyc_verified_at: Date | null;
+}
+export interface Subscriber {
+  id: number; tg_id: number; name: string; username: string | null; created_at: Date;
+  language_code: string | null; offer_accepted_at: Date | null; bot_blocked: boolean;
+}
 export interface Channel {
   id: number; owner_id: number; tg_chat_id: number; title: string; slug: string;
   description: string; is_active: boolean; created_at: Date;
   perks: string[]; welcome_text: string; trial_days: number; chat_type: "channel" | "supergroup";
   moderation: "pending" | "active" | "blocked"; moderation_reason: string | null; rules_accepted_at: Date | null;
-  reviewed_words: string[];
+  reviewed_words: string[]; category: string | null;
 }
 export interface Plan {
   id: number; channel_id: number; title: string; duration_days: number; price: number;
@@ -33,6 +43,7 @@ export interface Payment {
 export interface Withdrawal {
   id: number; owner_id: number; amount: number; /** Last 4 digits only. */ card_number: string; card_enc: string | null;
   status: "pending" | "paid" | "rejected"; note: string | null; created_at: Date; processed_at: Date | null;
+  payout_date: string | null;
 }
 
 export const displayName = (u: TgUser) => [u.first_name, u.last_name].filter(Boolean).join(" ");

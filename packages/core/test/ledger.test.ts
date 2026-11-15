@@ -4,6 +4,7 @@ import {
   encryptCard, expireDue, getWallet, hasActiveAccess, markPaymentPendingOtp, markWithdrawalPaid, MAX_OTP_ATTEMPTS, migrate,
   registerChannel, rejectWithdrawal, releasePaymentClaim, requestWithdrawal, upsertOwner, upsertSubscriber, assertCheckoutRate,
   updateChannel, createPlan as addPlan, createPromo, resolvePromo, listPromos, setPromoActive, getPlan, startTrial, acceptRules, screenText, screenChannel, reportChannel, setModeration, listModeration,
+  savePayoutProfile, submitKyc, decideKyc, setOwnerPhone, normalizePhone, nextPayoutDate, publicProfile, KYC_MONTHLY_LIMIT,
   type Sql,
 } from "../src/index.js";
 
@@ -41,6 +42,16 @@ d("virtual cashbox", () => {
     const plan = await createPlan(sql, owner.id, channel.id, { title: "1 oy", duration_days: 30, price: 4_900_000 });
     const sub = await upsertSubscriber(sql, { id: 222, first_name: "Aziz" });
     return { owner, channel, plan, sub };
+  }
+
+  /** An owner who filled the payout profile and has 441 000 so'm available (one 490 000 so'm payment). */
+  async function setupPayout() {
+    const base = await setup();
+    const big = await createPlan(sql, base.owner.id, base.channel.id, { title: "1 yil", duration_days: 365, price: 49_000_000 });
+    await pay(base.sub.id, big.id);
+    await setOwnerPhone(sql, 111, "+998 90 123 45 67");
+    await savePayoutProfile(sql, base.owner.id, { legalStatus: "self_employed", acceptTerms: true });
+    return base;
   }
 
   async function pay(subscriberId: number, planId: number, c = cfg) {
@@ -86,32 +97,69 @@ d("virtual cashbox", () => {
   });
 
   it("never lets parallel withdrawals overdraw the cashbox", async () => {
-    const { owner, plan, sub } = await setup();
-    await pay(sub.id, plan.id);
+    const { owner } = await setupPayout();
     const results = await Promise.allSettled([
-      requestWithdrawal(sql, owner.id, 3_000_000, "9860 1234 5678 4417", KEY),
-      requestWithdrawal(sql, owner.id, 3_000_000, "9860 1234 5678 4417", KEY),
+      requestWithdrawal(sql, owner.id, 30_000_000, "9860 1234 5678 4417", KEY),
+      requestWithdrawal(sql, owner.id, 30_000_000, "9860 1234 5678 4417", KEY),
     ]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
-    expect((await getWallet(sql, owner.id)).available).toBe(1_410_000);
+    expect((await getWallet(sql, owner.id)).available).toBe(14_100_000);
   });
 
   it("returns money to the cashbox when a withdrawal is rejected", async () => {
-    const { owner, plan, sub } = await setup();
-    await pay(sub.id, plan.id);
-    const w1 = await requestWithdrawal(sql, owner.id, 2_000_000, "8600123456784417", KEY);
-    const w2 = await requestWithdrawal(sql, owner.id, 1_000_000, "8600123456784417", KEY);
+    const { owner } = await setupPayout();
+    const w1 = await requestWithdrawal(sql, owner.id, 20_000_000, "8600123456784417", KEY);
+    const w2 = await requestWithdrawal(sql, owner.id, 10_000_000, "8600123456784417", KEY);
     await markWithdrawalPaid(sql, w1.id);
     await rejectWithdrawal(sql, w2.id, "karta bloklangan");
-    expect((await getWallet(sql, owner.id)).available).toBe(2_410_000);
+    expect((await getWallet(sql, owner.id)).available).toBe(24_100_000);
     await expect(markWithdrawalPaid(sql, w2.id)).rejects.toThrow();
   });
 
   it("rejects bad cards and tiny amounts", async () => {
-    const { owner, plan, sub } = await setup();
-    await pay(sub.id, plan.id);
-    await expect(requestWithdrawal(sql, owner.id, 2_000_000, "1234", KEY)).rejects.toThrow(/Karta/);
-    await expect(requestWithdrawal(sql, owner.id, 500, "9860123456784417", KEY)).rejects.toThrow(/10 000/);
+    const { owner } = await setupPayout();
+    await expect(requestWithdrawal(sql, owner.id, 20_000_000, "1234", KEY)).rejects.toThrow(/Karta/);
+    await expect(requestWithdrawal(sql, owner.id, 9_999_900, "9860123456784417", KEY)).rejects.toThrow(/100 000/);
+  });
+
+  it("asks for the payout profile first, then schedules the payout for the next Monday", async () => {
+    const { owner, channel, sub } = await setup();
+    const big = await createPlan(sql, owner.id, channel.id, { title: "1 yil", duration_days: 365, price: 49_000_000 });
+    await pay(sub.id, big.id);
+    await expect(requestWithdrawal(sql, owner.id, 20_000_000, "8600123456784417", KEY)).rejects.toThrow(/telefon, maqom/);
+    expect(() => normalizePhone("+7 999 123 45 67")).toThrow();
+    expect(normalizePhone("90 123 45 67")).toBe("+998901234567");
+    expect(await setOwnerPhone(sql, 111, "998901234567")).toBe(true);
+    expect(await setOwnerPhone(sql, 555, "998901234567")).toBe(false); // not an owner
+    await expect(savePayoutProfile(sql, owner.id, { legalStatus: "business", businessTin: "123", businessName: "X", acceptTerms: true })).rejects.toThrow(/STIR/);
+    await expect(savePayoutProfile(sql, owner.id, { legalStatus: "individual", acceptTerms: false })).rejects.toThrow(/rozilik/);
+    await savePayoutProfile(sql, owner.id, { legalStatus: "business", businessTin: "301 234 567", businessName: "Jasur YaTT", acceptTerms: true });
+    const w = await requestWithdrawal(sql, owner.id, 20_000_000, "8600123456784417", KEY);
+    expect(String(w.payout_date instanceof Date ? w.payout_date.toISOString().slice(0, 10) : w.payout_date)).toBe(nextPayoutDate());
+  });
+
+  it("computes the next Monday in Tashkent time", () => {
+    expect(nextPayoutDate(new Date("2026-11-15T10:00:00Z"))).toBe("2026-11-16"); // Sunday → Monday
+    expect(nextPayoutDate(new Date("2026-11-16T10:00:00Z"))).toBe("2026-11-23"); // Monday → next Monday
+    expect(nextPayoutDate(new Date("2026-11-15T19:30:00Z"))).toBe("2026-11-23"); // already Monday 00:30 in Tashkent
+  });
+
+  it("requires an operator identity check above the monthly limit", async () => {
+    const { owner, sub, channel } = await setupPayout();
+    const huge = await createPlan(sql, owner.id, channel.id, { title: "VIP", duration_days: 3650, price: 1_000_000_000 });
+    await pay(sub.id, huge.id);
+    await requestWithdrawal(sql, owner.id, 40_000_000, "8600123456784417", KEY);
+    await expect(requestWithdrawal(sql, owner.id, KYC_MONTHLY_LIMIT, "8600123456784417", KEY)).rejects.toThrow(/shaxsingizni tasdiqlang/);
+    await expect(submitKyc(sql, owner.id, { fullName: "Karimov", pinfl: "31234567890123" }, KEY)).rejects.toThrow(/Familiya/);
+    await expect(submitKyc(sql, owner.id, { fullName: "Karimov Jasur", pinfl: "1234" }, KEY)).rejects.toThrow(/JSHSHIR/);
+    const o = await submitKyc(sql, owner.id, { fullName: " Karimov  Jasur Akmalovich ", pinfl: "3123 4567 8901 23" }, KEY);
+    expect(o.kyc_status).toBe("pending");
+    expect(o.kyc_pinfl_enc).not.toContain("3123");
+    expect(publicProfile(o, KEY, 0).kyc.pinfl).toBe("••••••••••0123");
+    await expect(requestWithdrawal(sql, owner.id, KYC_MONTHLY_LIMIT, "8600123456784417", KEY)).rejects.toThrow(/tekshirilmoqda/);
+    await decideKyc(sql, owner.id, "verified", null);
+    await requestWithdrawal(sql, owner.id, KYC_MONTHLY_LIMIT, "8600123456784417", KEY);
+    await expect(submitKyc(sql, owner.id, { fullName: "Boshqa Odam", pinfl: "41234567890123" }, KEY)).rejects.toThrow(/allaqachon/);
   });
 
   it("reminds once and expires overdue subscriptions", async () => {
@@ -131,9 +179,8 @@ d("virtual cashbox", () => {
   });
 
   it("stores only the last 4 digits in clear and the full card encrypted", async () => {
-    const { owner, plan, sub } = await setup();
-    await pay(sub.id, plan.id);
-    const w = await requestWithdrawal(sql, owner.id, 2_000_000, "8600 1234 5678 4417", KEY);
+    const { owner } = await setupPayout();
+    const w = await requestWithdrawal(sql, owner.id, 20_000_000, "8600 1234 5678 4417", KEY);
     expect(w.card_number).toBe("4417");
     expect(decryptCard(w.card_enc!, KEY)).toBe("8600123456784417");
   });
@@ -273,11 +320,10 @@ d("virtual cashbox", () => {
   });
 
   it("sends flagged or reported channels to review, freezes payouts and blocks sales when blocked", async () => {
-    const { owner, channel, plan, sub } = await setup();
-    await pay(sub.id, plan.id);
+    const { owner, channel, plan, sub } = await setupPayout();
     await updateChannel(sql, owner.id, channel.id, { description: "Eng zo'r 18+ kontent" });
     expect(await screenChannel(sql, channel.id)).toEqual(["18+"]);
-    await expect(requestWithdrawal(sql, owner.id, 1_000_000, "8600123456784417", KEY)).rejects.toThrow(/tekshiruvda/);
+    await expect(requestWithdrawal(sql, owner.id, 10_000_000, "8600123456784417", KEY)).rejects.toThrow(/tekshiruvda/);
     // Still sells while in review.
     await createPayment(sql, { subscriberId: sub.id, planId: plan.id, provider: "mock", autoRenew: false });
     await setModeration(sql, channel.id, "active", null);
@@ -285,7 +331,7 @@ d("virtual cashbox", () => {
     await updateChannel(sql, owner.id, channel.id, { description: "Eng zo'r 18+ kontent, kazino" });
     expect(await screenChannel(sql, channel.id)).toEqual(["kazino"]);
     await setModeration(sql, channel.id, "active", null);
-    await requestWithdrawal(sql, owner.id, 1_000_000, "8600123456784417", KEY);
+    await requestWithdrawal(sql, owner.id, 10_000_000, "8600123456784417", KEY);
 
     const subs = await Promise.all([301, 302, 303].map((id) => upsertSubscriber(sql, { id, first_name: "S" })));
     expect((await reportChannel(sql, channel.id, subs[0]!.id, "fraud", "")).sentToReview).toBe(false);
@@ -299,7 +345,7 @@ d("virtual cashbox", () => {
     await expect(createPayment(sql, { subscriberId: sub.id, planId: plan.id, provider: "mock", autoRenew: false })).rejects.toThrow(/qabul qilmayapti/);
     const [s] = await sql`SELECT auto_renew FROM subscriptions WHERE channel_id = ${channel.id}`;
     expect(s!.auto_renew).toBe(false);
-    await expect(requestWithdrawal(sql, owner.id, 1_000_000, "8600123456784417", KEY)).rejects.toThrow(/bloklangan/);
+    await expect(requestWithdrawal(sql, owner.id, 10_000_000, "8600123456784417", KEY)).rejects.toThrow(/bloklangan/);
   });
 
   it("holds money longer for new channels", async () => {

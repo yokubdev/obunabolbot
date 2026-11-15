@@ -1,8 +1,9 @@
 import type { Sql } from "./db.js";
 import { AppError, notFound } from "./errors.js";
-import type { Withdrawal } from "./types.js";
+import type { Owner, Withdrawal } from "./types.js";
 import { encryptCard } from "./cardvault.js";
 import { assertPayoutsAllowed } from "./moderation.js";
+import { checkPayoutProfile, nextPayoutDate, withdrawnThisMonth } from "./payout-profile.js";
 
 export interface WalletSummary {
   /** Withdrawable now (tiyin). */
@@ -53,7 +54,7 @@ export function normalizeCard(card: string): string {
   return digits;
 }
 
-export const MIN_WITHDRAWAL = 1_000_000; // 10 000 so'm
+export const MIN_WITHDRAWAL = 10_000_000; // 100 000 so'm
 /** At most this many payout requests per owner per day (limits damage from a hijacked account). */
 export const MAX_WITHDRAWALS_PER_DAY = 5;
 
@@ -69,11 +70,14 @@ export async function requestWithdrawal(
   cardKey: Buffer,
 ): Promise<Withdrawal> {
   if (!Number.isInteger(amount) || amount < MIN_WITHDRAWAL)
-    throw new AppError("bad_amount", "Eng kam yechish summasi 10 000 so'm");
+    throw new AppError("bad_amount", "Eng kam yechish summasi 100 000 so'm");
   const cardNumber = normalizeCard(card);
   await assertPayoutsAllowed(sql, ownerId);
   return sql.begin(async (tx) => {
-    await tx`SELECT id FROM owners WHERE id = ${ownerId} FOR UPDATE`;
+    const [owner] = await tx<Owner[]>`SELECT * FROM owners WHERE id = ${ownerId} FOR UPDATE`;
+    if (!owner) throw notFound("Egasi");
+    // Inside the lock, so parallel requests can't jointly pass the monthly identity-check limit.
+    checkPayoutProfile(owner, await withdrawnThisMonth(tx, ownerId), amount);
     const { available } = (await tx<{ available: number }[]>`
       SELECT COALESCE(SUM(amount), 0)::bigint AS available
       FROM ledger_entries WHERE owner_id = ${ownerId}
@@ -86,8 +90,9 @@ export async function requestWithdrawal(
     if (today >= MAX_WITHDRAWALS_PER_DAY)
       throw new AppError("too_many", "Bir kunda ko'pi bilan 5 ta yechish so'rovi", 429);
     const [w] = await tx<Withdrawal[]>`
-      INSERT INTO withdrawals (owner_id, amount, card_number, card_enc, status)
-      VALUES (${ownerId}, ${amount}, ${cardNumber.slice(-4)}, ${encryptCard(cardNumber, cardKey)}, 'pending') RETURNING *`;
+      INSERT INTO withdrawals (owner_id, amount, card_number, card_enc, status, payout_date)
+      VALUES (${ownerId}, ${amount}, ${cardNumber.slice(-4)}, ${encryptCard(cardNumber, cardKey)}, 'pending', ${nextPayoutDate()})
+      RETURNING *`;
     await tx`
       INSERT INTO ledger_entries (owner_id, amount, type, withdrawal_id)
       VALUES (${ownerId}, ${-amount}, 'withdrawal', ${w!.id})`;
@@ -99,10 +104,17 @@ export const listWithdrawals = (sql: Sql, ownerId: number) =>
   sql<Withdrawal[]>`SELECT * FROM withdrawals WHERE owner_id = ${ownerId} ORDER BY id DESC LIMIT 50`;
 
 /** Includes card_enc: only the platform admin endpoint may read it, and it decrypts there. */
-export const listPendingWithdrawals = (sql: Sql) => sql<(Withdrawal & { owner_name: string; owner_tg_id: number })[]>`
-  SELECT w.*, o.name AS owner_name, o.tg_id AS owner_tg_id
+export interface PendingWithdrawal extends Withdrawal {
+  owner_name: string; owner_tg_id: number; owner_phone: string | null; legal_status: string | null;
+  business_tin: string | null; business_name: string | null; kyc_status: string; kyc_full_name: string | null;
+}
+
+/** With who the creator is, so the operator knows whom the payout goes to (and for tax reporting). */
+export const listPendingWithdrawals = (sql: Sql) => sql<PendingWithdrawal[]>`
+  SELECT w.*, o.name AS owner_name, o.tg_id AS owner_tg_id, o.phone AS owner_phone, o.legal_status,
+         o.business_tin, o.business_name, o.kyc_status, o.kyc_full_name
   FROM withdrawals w JOIN owners o ON o.id = w.owner_id
-  WHERE w.status = 'pending' ORDER BY w.id`;
+  WHERE w.status = 'pending' ORDER BY w.payout_date NULLS FIRST, w.id`;
 
 /** Platform admin: the money was sent to the card (manually, or by a payout provider). */
 export async function markWithdrawalPaid(sql: Sql, id: number): Promise<Withdrawal> {

@@ -74,6 +74,8 @@ export interface DueRow {
   expires_at: Date;
   auto_renew: boolean;
   plan_price: number;
+  /** Only set by claimReminders. */
+  bot_blocked?: boolean;
 }
 
 /**
@@ -92,7 +94,7 @@ export async function claimReminders(sql: Sql, days: 1 | 3): Promise<DueRow[]> {
     WHERE c.id = s.channel_id AND sb.id = s.subscriber_id AND p.id = s.plan_id
       AND s.status = 'active' AND ${window}
     RETURNING s.id AS subscription_id, sb.tg_id AS subscriber_tg_id, c.tg_chat_id, c.title AS channel_title,
-              c.slug AS channel_slug, s.expires_at, s.auto_renew, p.price AS plan_price`;
+              c.slug AS channel_slug, s.expires_at, s.auto_renew, p.price AS plan_price, sb.bot_blocked`;
 }
 
 /** Marks overdue subscriptions expired and returns them so the bot can remove the members. */

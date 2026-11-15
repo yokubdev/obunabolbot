@@ -1,6 +1,6 @@
 import type { Api } from "grammy";
 import {
-  claimDueRenewals, claimReminders, confirmPayment, createPayment, expireDue, formatSom, markPaymentFailed, stopAutoRenew,
+  claimDueRenewals, claimReminders, confirmPayment, createPayment, expireDue, formatSom, markBotBlocked, markPaymentFailed, stopAutoRenew,
   type LedgerConfig, type Sql,
 } from "@obuna/core";
 import type { CardPaymentProvider } from "@obuna/atmos";
@@ -13,6 +13,12 @@ export interface JobDeps {
   ledger: LedgerConfig;
   webAppUrl: string;
   log?: (msg: string) => void;
+}
+
+/** Telegram's answer when the user blocked the bot or deleted their account. */
+export function isBlockedError(e: unknown): boolean {
+  const err = e as { error_code?: number; description?: string };
+  return err?.error_code === 403 && /blocked|deactivated/i.test(err.description ?? "");
 }
 
 /** One pass of the scheduler: auto-renew, remind, then expire. Safe to run often and concurrently-safe per row. */
@@ -56,11 +62,15 @@ export async function runJobs(d: JobDeps) {
 
   for (const days of [3, 1] as const) {
     for (const r of await claimReminders(d.sql, days)) {
+      if (r.bot_blocked) continue;
       stats.reminded++;
       await sendReminder(d.api, {
         tgUserId: r.subscriber_tg_id, channelTitle: r.channel_title, expiresAt: r.expires_at,
         autoRenew: r.auto_renew, price: r.plan_price, renewUrl: renewUrl(r.channel_slug),
-      }).catch((e) => log(`reminder failed: ${e}`));
+      }).catch(async (e) => {
+        if (isBlockedError(e)) await markBotBlocked(d.sql, r.subscriber_tg_id).catch(() => {});
+        else log(`reminder failed: ${e}`);
+      });
     }
   }
 

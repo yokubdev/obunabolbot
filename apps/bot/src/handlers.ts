@@ -1,7 +1,7 @@
 import { Bot, InlineKeyboard } from "grammy";
 import {
   acceptRules, getOwnerByTgId, screenChannel, createDefaultPlans, deactivateChannelByChatId, getChannelBySlug, hasActiveAccess, listPlans, registerChannel,
-  upsertOwner, AppError, type Sql,
+  upsertOwner, setOwnerPhone, AppError, type Sql,
 } from "@obuna/core";
 import { webAppButton } from "@obuna/telegram";
 
@@ -175,6 +175,20 @@ export function registerHandlers(bot: Bot, d: BotDeps) {
       await ctx.editMessageText(`✅ «${ch.title}» uchun platforma qoidalariga rozilik berdingiz. Obuna sotish yoqildi.`).catch(() => {});
     } catch {
       await ctx.answerCallbackQuery({ text: "Kanal topilmadi" });
+    }
+  });
+
+  // The owner shared their phone (Mini App requestContact or the bot's keyboard). Only their own number counts:
+  // a forwarded contact card has another user_id, and Telegram guarantees user_id for the sender's own contact.
+  bot.on("message:contact", async (ctx) => {
+    const c = ctx.message.contact;
+    if (ctx.chat.type !== "private" || c.user_id !== ctx.from.id) return;
+    try {
+      const saved = await setOwnerPhone(d.sql, ctx.from.id, c.phone_number);
+      if (saved) await ctx.reply("✅ Telefon raqamingiz saqlandi. Ilovaga qaytib, pul yechishni davom ettiring.");
+    } catch (e) {
+      if (e instanceof AppError) await ctx.reply(e.message);
+      else throw e;
     }
   });
 

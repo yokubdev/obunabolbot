@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import type { Api } from "grammy";
 import {
-  AppError, assertCheckoutRate, claimPaymentForConfirm, commissionFor, confirmPayment, createPayment, getPayment, getPlan,
+  AppError, acceptOffer, assertCheckoutRate, claimPaymentForConfirm, commissionFor, confirmPayment, createPayment, getPayment, getPlan,
   markPaymentFailed, markPaymentPendingOtp, releasePaymentClaim, resolvePromo, sessionIdOf, startTrial, getChannel, displayName, upsertSubscriber, type Sql, type TgUser,
 } from "@obuna/core";
 import { ProviderError, type CardPaymentProvider } from "@obuna/atmos";
@@ -32,6 +32,7 @@ export class CheckoutService {
   async startTrial(user: TgUser, channelId: number) {
     const subscriber = await upsertSubscriber(this.sql, user);
     const sub = await startTrial(this.sql, subscriber.id, channelId);
+    await acceptOffer(this.sql, subscriber.id);
     const channel = await getChannel(this.sql, channelId);
     const [owner] = await this.sql<{ tg_id: number }[]>`SELECT tg_id FROM owners WHERE id = ${channel.owner_id}`;
     const tasks = [
@@ -49,6 +50,8 @@ export class CheckoutService {
   async start(user: TgUser, a: { planId: number; autoRenew: boolean; cardNumber: string; expiry: string; promoCode?: string }) {
     const subscriber = await upsertSubscriber(this.sql, user);
     await assertCheckoutRate(this.sql, subscriber.id);
+    // The pay button sits under "To'lash orqali ommaviy ofertaga rozilik bildirasiz".
+    await acceptOffer(this.sql, subscriber.id);
     const { payment } = await createPayment(this.sql, {
       subscriberId: subscriber.id, planId: a.planId, provider: this.provider.name, autoRenew: a.autoRenew,
       promoCode: a.promoCode || null,

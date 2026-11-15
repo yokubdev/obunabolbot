@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   acceptRules, screenChannel, createPlan, createPromo, getOwnedChannel, listPromos, setPromoActive, getOwnerStats, getWallet, listLedger, listOwnerChannels, listOwnerSubscribers,
   listPlans, listWithdrawals, requestWithdrawal, updateChannel, updatePlan, type Owner, type OwnerSubFilter, type Sql,
+  CHANNEL_CATEGORIES, publicProfile, savePayoutProfile, submitKyc, withdrawnThisMonth, getOwnerByTgId,
   type Withdrawal,
 } from "@obuna/core";
 import { CurrentOwner, OwnerGuard, TelegramAuthGuard } from "../common/auth.js";
@@ -27,7 +28,15 @@ const ChannelPatch = z.object({
   perks: z.array(z.string().max(80)).max(6).optional(),
   welcomeText: z.string().max(1000).optional(),
   trialDays: z.number().int().min(0).max(30).optional(),
+  category: z.enum(CHANNEL_CATEGORIES).optional(),
 });
+const PayoutProfileBody = z.object({
+  legalStatus: z.enum(["self_employed", "business", "individual"]),
+  businessTin: z.string().max(20).nullable().optional(),
+  businessName: z.string().max(120).nullable().optional(),
+  acceptTerms: z.literal(true),
+}).strict();
+const KycBody = z.object({ fullName: z.string().max(120), pinfl: z.string().max(20) }).strict();
 const WithdrawBody = z.object({ amount: z.number().int().positive(), cardNumber: z.string().max(32) });
 const ChannelPatchStrict = ChannelPatch.strict();
 const PromoBody = z.object({
@@ -43,7 +52,7 @@ const PromoPatch = z.object({ isActive: z.boolean() }).strict();
 /** What an owner may see of a payout: never the encrypted card blob. */
 const publicWithdrawal = (w: Withdrawal) => ({
   id: w.id, amount: w.amount, status: w.status, note: w.note, created_at: w.created_at, processed_at: w.processed_at,
-  card_number: `•••• ${w.card_number.slice(-4)}`,
+  card_number: `•••• ${w.card_number.slice(-4)}`, payout_date: w.payout_date,
 });
 
 /** The channel owner's panel: channels, plans, subscribers, revenue and the virtual cashbox. */
@@ -152,5 +161,28 @@ export class OwnerController {
   async withdraw(@CurrentOwner() owner: Owner, @Body() body: unknown) {
     const b = WithdrawBody.parse(body);
     return publicWithdrawal(await requestWithdrawal(this.sql, owner.id, b.amount, b.cardNumber, this.cfg.cardKey));
+  }
+
+  /** Phone, tax status, payout terms and the identity check, as the owner sees them. */
+  @Get("payout-profile")
+  async payoutProfile(@CurrentOwner() owner: Owner) {
+    // Re-read: the phone arrives through the bot, after the request that loaded `owner` may have started.
+    const fresh = (await getOwnerByTgId(this.sql, owner.tg_id)) ?? owner;
+    return publicProfile(fresh, this.cfg.cardKey, await withdrawnThisMonth(this.sql, owner.id));
+  }
+
+  @Post("payout-profile")
+  async savePayoutProfile(@CurrentOwner() owner: Owner, @Body() body: unknown) {
+    const o = await savePayoutProfile(this.sql, owner.id, PayoutProfileBody.parse(body));
+    return publicProfile(o, this.cfg.cardKey, await withdrawnThisMonth(this.sql, owner.id));
+  }
+
+  /** The owner asks for an identity check (instead of MyID): an operator compares it with the passport. */
+  @Post("kyc")
+  async kyc(@CurrentOwner() owner: Owner, @Body() body: unknown) {
+    const o = await submitKyc(this.sql, owner.id, KycBody.parse(body), this.cfg.cardKey);
+    await notifyAdmins(this.tg, this.cfg.platformAdminIds,
+      `🪪 ${o.name} shaxsini tasdiqlashni so'radi. Platforma panelidagi «Tekshiruv» bo'limida ko'rib chiqing.`);
+    return publicProfile(o, this.cfg.cardKey, await withdrawnThisMonth(this.sql, owner.id));
   }
 }

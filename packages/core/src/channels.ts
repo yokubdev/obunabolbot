@@ -61,13 +61,20 @@ export async function getOwnedChannel(sql: Sql, ownerId: number, channelId: numb
   return ch;
 }
 
+export const CHANNEL_CATEGORIES = [
+  "education", "business", "finance", "sport", "health", "tech", "lifestyle", "entertainment", "news", "other",
+] as const;
+export type ChannelCategory = (typeof CHANNEL_CATEGORIES)[number];
+
 export async function updateChannel(
   sql: Sql,
   ownerId: number,
   channelId: number,
-  patch: { description?: string; slug?: string; perks?: string[]; welcomeText?: string; trialDays?: number },
+  patch: { description?: string; slug?: string; perks?: string[]; welcomeText?: string; trialDays?: number; category?: ChannelCategory },
 ): Promise<Channel> {
   await getOwnedChannel(sql, ownerId, channelId);
+  if (patch.category !== undefined && !CHANNEL_CATEGORIES.includes(patch.category))
+    throw new AppError("bad_category", "Toifani tanlang");
   const perks = patch.perks?.map((p) => p.trim()).filter(Boolean);
   if (perks && (perks.length > MAX_PERKS || perks.some((p) => p.length > 80)))
     throw new AppError("bad_perks", `Ko'pi bilan ${MAX_PERKS} ta band, har biri 80 belgigacha`);
@@ -89,7 +96,8 @@ export async function updateChannel(
       slug = COALESCE(${patch.slug ?? null}, slug),
       perks = COALESCE(${perks ? sql.array(perks) : null}, perks),
       welcome_text = COALESCE(${patch.welcomeText?.trim() ?? null}, welcome_text),
-      trial_days = COALESCE(${patch.trialDays ?? null}, trial_days)
+      trial_days = COALESCE(${patch.trialDays ?? null}, trial_days),
+      category = COALESCE(${patch.category ?? null}, category)
     WHERE id = ${channelId} RETURNING *`;
   return row!;
 }

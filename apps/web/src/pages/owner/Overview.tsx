@@ -6,6 +6,11 @@ import { api } from "../../lib/api";
 import type { OwnerChannel } from "../../lib/types";
 import type { OwnerCtx } from "./OwnerLayout";
 
+const CATEGORIES: Record<string, string> = {
+  education: "Ta'lim", business: "Biznes", finance: "Moliya", sport: "Sport", health: "Sog'liq", tech: "Texnologiya",
+  lifestyle: "Hayot tarzi", entertainment: "Ko'ngilochar", news: "Yangiliklar", other: "Boshqa",
+};
+
 export default function Overview() {
   const { overview: o, reload } = useOutletContext<OwnerCtx>();
   const [copied, setCopied] = useState<number | null>(null);
@@ -113,6 +118,7 @@ function ChannelSheet({ channel, onClose, onSaved }: { channel: OwnerChannel | n
   const [perks, setPerks] = useState("");
   const [welcome, setWelcome] = useState("");
   const [trial, setTrial] = useState("0");
+  const [category, setCategory] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   if (channel !== key) {
@@ -122,6 +128,7 @@ function ChannelSheet({ channel, onClose, onSaved }: { channel: OwnerChannel | n
     setPerks(channel?.perks.join("\n") ?? "");
     setWelcome(channel?.welcome_text ?? "");
     setTrial(String(channel?.trial_days ?? 0));
+    setCategory(channel?.category ?? "");
     setErr(null);
   }
   const save = async () => {
@@ -135,6 +142,7 @@ function ChannelSheet({ channel, onClose, onSaved }: { channel: OwnerChannel | n
           description, welcomeText: welcome, trialDays: Number(trial || 0),
           perks: perks.split("\n").map((p) => p.trim()).filter(Boolean),
           ...(slug !== channel.slug ? { slug } : {}),
+          ...(category ? { category } : {}),
         },
       });
       onSaved();
@@ -160,6 +168,13 @@ function ChannelSheet({ channel, onClose, onSaved }: { channel: OwnerChannel | n
         Xush kelibsiz xabari (to'lovdan keyin bot yuboradi)
         <textarea className={area} maxLength={1000} value={welcome} onChange={(e) => setWelcome(e.target.value)}
           placeholder="Xush kelibsiz! Avval qadalgan xabarni o'qing." />
+      </label>
+      <label className="flex flex-col gap-1 rounded-xl bg-surface px-4 py-3 text-xs text-muted focus-within:ring-2 focus-within:ring-accent">
+        Toifa
+        <select className="bg-transparent text-base text-ink outline-none" value={category} onChange={(e) => setCategory(e.target.value)}>
+          <option value="" disabled>Tanlang</option>
+          {Object.entries(CATEGORIES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
       </label>
       <Field label="Bepul sinov (kun, 0 = o'chiq, 30 gacha)" inputMode="numeric" value={trial} maxLength={2}
         onChange={(e) => setTrial(e.target.value.replace(/\D/g, ""))}
