@@ -11,6 +11,7 @@ export interface OwnerChannel {
   id: number; title: string; slug: string; description: string; is_active: boolean; link: string;
   perks: string[]; welcome_text: string; trial_days: number; chat_type: "channel" | "supergroup";
   moderation: "pending" | "active" | "blocked"; moderation_reason: string | null; rules_accepted_at: string | null;
+  category: string | null;
 }
 export interface Wallet { available: number; pending: number; commissionThisMonth: number }
 export interface Stats {
@@ -27,7 +28,16 @@ export interface LedgerRow {
   id: number; amount: number; type: "payment" | "commission" | "withdrawal" | "withdrawal_reversal";
   created_at: string; available_at: string; subscriber_name: string | null; plan_title: string | null; card_number: string | null;
 }
-export interface Withdrawal { id: number; amount: number; card_number: string; status: "pending" | "paid" | "rejected"; note: string | null; created_at: string }
+export interface Withdrawal { id: number; amount: number; card_number: string; status: "pending" | "paid" | "rejected"; note: string | null; created_at: string; payout_date: string | null }
+
+export type LegalStatus = "self_employed" | "business" | "individual";
+export type KycStatus = "none" | "pending" | "verified" | "rejected";
+export interface PayoutProfile {
+  phone: string | null; legalStatus: LegalStatus | null; businessTin: string | null; businessName: string | null;
+  termsAccepted: boolean; complete: boolean;
+  kyc: { status: KycStatus; fullName: string | null; pinfl: string | null; note: string | null };
+  withdrawnThisMonth: number; kycMonthlyLimit: number; nextPayoutDate: string;
+}
 export interface WalletFull extends Wallet { ledger: LedgerRow[]; withdrawals: Withdrawal[] }
 export interface Me { user: { id: number; first_name: string }; isOwner: boolean; isPlatformAdmin: boolean; botUsername: string }
 

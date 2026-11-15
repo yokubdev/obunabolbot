@@ -3,7 +3,9 @@ import { useOutletContext } from "react-router-dom";
 import { api } from "../../lib/api";
 import { date, som } from "../../lib/format";
 import { haptic } from "../../lib/telegram";
-import type { WalletFull } from "../../lib/types";
+import type { PayoutProfile, WalletFull } from "../../lib/types";
+import { ApiError } from "../../lib/api";
+import { KycForm, PayoutSetup, STATUS_LABEL, payoutNote } from "./PayoutSetup";
 import { useApi } from "../../lib/useApi";
 import { Badge, Button, Card, ErrorBox, Field, Icon, SectionTitle, Sheet, Spinner, Stat } from "../../components/ui";
 import type { OwnerCtx } from "./OwnerLayout";
@@ -15,6 +17,10 @@ const LABEL: Record<string, string> = {
 export default function Kassa() {
   const { overview, reload: reloadOverview } = useOutletContext<OwnerCtx>();
   const { data, error, loading, reload } = useApi<WalletFull>("/api/owner/wallet");
+  const profileApi = useApi<PayoutProfile>("/api/owner/payout-profile");
+  const [profileOverride, setProfile] = useState<PayoutProfile | null>(null);
+  const profile = profileOverride ?? profileApi.data;
+  const [needKyc, setNeedKyc] = useState(false);
   const [open, setOpen] = useState(false);
   const [amount, setAmount] = useState("");
   const [card, setCard] = useState("");
@@ -35,11 +41,15 @@ export default function Kassa() {
       await Promise.all([reload(), reloadOverview()]);
     } catch (e) {
       haptic("error");
+      if (e instanceof ApiError && e.code === "kyc_required") setNeedKyc(true);
       setErr((e as Error).message);
     } finally {
       setBusy(false);
     }
   };
+
+  const overLimit = !!profile && profile.kyc.status !== "verified"
+    && profile.withdrawnThisMonth + Number(amount || 0) * 100 > profile.kycMonthlyLimit;
 
   return (
     <div className="flex flex-col gap-6">
@@ -52,13 +62,28 @@ export default function Kassa() {
         <Card className="flex flex-col gap-2 bg-accent-soft p-5 md:col-span-1">
           <span className="text-sm text-accent">Yechish mumkin</span>
           <span className="text-3xl font-bold tracking-tight">{som(data.available)}</span>
-          <Button className="mt-2" disabled={data.available < 1_000_000} onClick={() => { setAmount(String(Math.floor(data.available / 100))); setOpen(true); }}>
+          <Button className="mt-2" disabled={data.available < 10_000_000} onClick={() => { setAmount(String(Math.floor(data.available / 100))); setOpen(true); }}>
             <Icon name="arrowUp" size={18} />Pulni yechish
           </Button>
         </Card>
-        <Stat label="24 soatda ochiladi" value={som(data.pending)} note="Yangi to'lovlar ushlab turiladi" />
+        <Stat label="Ushlab turilgan" value={som(data.pending)} note="Yangi to'lovlar biroz kutib ochiladi" />
         <Stat label="Shu oy komissiya" value={som(data.commissionThisMonth)} />
       </div>
+
+      {profile && (
+        <Card className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 text-sm">
+          <span className="font-medium">To'lov ma'lumotlari:</span>
+          {profile.complete ? (
+            <>
+              <span>{profile.phone}</span>
+              <span className="text-muted">{profile.legalStatus && STATUS_LABEL[profile.legalStatus]}{profile.businessName ? ` · ${profile.businessName}` : ""}</span>
+              {profile.kyc.status === "verified" ? <Badge tone="ok">Shaxs tasdiqlangan</Badge>
+                : profile.kyc.status === "pending" ? <Badge tone="warn">Tekshirilmoqda</Badge> : null}
+              <span className="text-muted">Keyingi to'lov: {date(profile.nextPayoutDate)}</span>
+            </>
+          ) : <span className="text-muted">Birinchi yechishda to'ldiriladi (1 daqiqa)</span>}
+        </Card>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-2">
         <section className="flex flex-col gap-3">
@@ -89,7 +114,7 @@ export default function Kassa() {
             {data.withdrawals.length === 0 && <p className="p-6 text-center text-sm text-muted">Hali so'rov yo'q.</p>}
             {data.withdrawals.map((w) => (
               <div key={w.id} className="flex items-center gap-3 px-4 py-3 text-sm">
-                <div className="flex flex-1 flex-col"><span className="font-medium">{som(w.amount)}</span><span className="text-xs text-muted">{date(w.created_at)} · {w.card_number}</span></div>
+                <div className="flex flex-1 flex-col"><span className="font-medium">{som(w.amount)}</span><span className="text-xs text-muted">{date(w.created_at)} · {w.card_number}{w.status === "pending" && w.payout_date ? ` · ${date(w.payout_date)} to'lanadi` : ""}</span></div>
                 {w.status === "paid" ? <Badge tone="ok">O'tkazildi</Badge> : w.status === "pending" ? <Badge tone="warn">Jarayonda</Badge> : <Badge>Rad etildi</Badge>}
               </div>
             ))}
@@ -97,13 +122,20 @@ export default function Kassa() {
         </section>
       </div>
 
-      <Sheet open={open} onClose={() => setOpen(false)} title="Pulni yechish">
+      <Sheet open={open} onClose={() => setOpen(false)} title={profile && !profile.complete ? "To'lov ma'lumotlari" : "Pulni yechish"}>
+        {!profile ? <Spinner /> : !profile.complete ? <PayoutSetup profile={profile} onChange={setProfile} /> : (needKyc || overLimit) && profile.kyc.status !== "verified" ? (
+          <>
+            <KycForm profile={profile} onChange={(p) => { setProfile(p); setErr(null); }} />
+            {profile.kyc.status !== "pending" && <Button variant="ghost" onClick={() => { setNeedKyc(false); setAmount(String(Math.max(0, Math.floor((profile.kycMonthlyLimit - profile.withdrawnThisMonth) / 100)))); }}>Chegaragacha yechish</Button>}
+          </>
+        ) : <>
         <Field label="Summa (so'm)" inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d]/g, ""))} />
         <Field label="Karta (Uzcard / Humo)" inputMode="numeric" placeholder="9860 0000 0000 0000" value={card}
           onChange={(e) => setCard(e.target.value.replace(/\D/g, "").slice(0, 16).replace(/(\d{4})(?=\d)/g, "$1 "))} />
-        <p className="px-1 text-xs text-muted">Pul 1 ish kuni ichida kartangizga tushadi. Eng kam summa 10 000 so'm.</p>
+        <p className="px-1 text-xs text-muted">{payoutNote(profile)}</p>
         {err && <p role="alert" className="text-sm text-warn">{err}</p>}
         <Button size="lg" disabled={busy || !amount || card.length < 19} onClick={withdraw}>{busy ? "Yuborilmoqda…" : "Tasdiqlash"}</Button>
+        </>}
       </Sheet>
     </div>
   );

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { date, durationLabel, som } from "../lib/format";
 import { haptic } from "../lib/telegram";
@@ -304,6 +304,11 @@ export default function ChannelPage() {
                 {busy ? "Yuborilmoqda…" : `${som(price)} to'lash`}
               </Button>
             </div>
+          )}
+          {(step.kind === "card" || step.kind === "plans") && (
+            <p className="text-center text-xs text-muted">
+              To'lash yoki sinovni boshlash orqali <Link to="/offer" className="text-accent underline">ommaviy oferta</Link> shartlariga rozilik bildirasiz.
+            </p>
           )}
           {step.kind === "otp" && (
             <Button size="lg" className="w-full" disabled={busy || otp.length < 4} onClick={() => confirm(step.paymentId)}>

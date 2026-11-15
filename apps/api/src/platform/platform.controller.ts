@@ -2,13 +2,17 @@ import { Body, Controller, Get, Inject, Logger, Param, ParseIntPipe, Post, UseGu
 import type { Api } from "grammy";
 import { z } from "zod";
 import {
-  decryptCard, formatSom, listModeration, listPendingWithdrawals, markWithdrawalPaid, rejectWithdrawal, setModeration,
+  decideKyc, decryptCard, formatSom, listKycQueue, listModeration, listPendingWithdrawals, markWithdrawalPaid, rejectWithdrawal, setModeration,
   type Sql, type Withdrawal,
 } from "@obuna/core";
 
 const ModerationBody = z.discriminatedUnion("status", [
   z.object({ status: z.literal("active") }),
   z.object({ status: z.literal("blocked"), reason: z.string().trim().min(3).max(300) }),
+]);
+const KycDecision = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("verified") }),
+  z.object({ status: z.literal("rejected"), note: z.string().trim().min(3).max(300) }),
 ]);
 import { CONFIG } from "../tokens.js";
 import type { AppConfig } from "../config.js";
@@ -55,6 +59,30 @@ export class PlatformController {
     const w = await rejectWithdrawal(this.sql, id, note);
     await this.tell(w.owner_id, `⚠️ ${formatSom(w.amount)} yechib bo'lmadi: ${note}. Pul kassangizga qaytarildi.`);
     return this.strip(w);
+  }
+
+  /**
+   * Identity checks (instead of MyID). The PINFL is decrypted only here, so the operator can compare
+   * it and the full name with the passport photo the creator sends to support.
+   */
+  @Get("kyc")
+  async kycQueue() {
+    const rows = await listKycQueue(this.sql);
+    return rows.map((o) => ({
+      ownerId: o.id, name: o.name, username: o.username, tgId: o.tg_id, phone: o.phone, legalStatus: o.legal_status,
+      fullName: o.kyc_full_name, submittedAt: o.kyc_submitted_at,
+      pinfl: o.kyc_pinfl_enc ? decryptCard(o.kyc_pinfl_enc, this.cfg.cardKey) : null,
+    }));
+  }
+
+  @Post("owners/:id/kyc")
+  async decideKyc(@Param("id", ParseIntPipe) id: number, @Body() body: unknown) {
+    const b = KycDecision.parse(body);
+    const o = await decideKyc(this.sql, id, b.status, b.status === "rejected" ? b.note : null);
+    await this.tell(o.id, b.status === "verified"
+      ? "✅ Shaxsingiz tasdiqlandi. Endi oylik chegarasiz pul yechishingiz mumkin."
+      : `⚠️ Shaxsingizni tasdiqlab bo'lmadi: ${b.note}. Ma'lumotlarni to'g'rilab, qayta yuboring.`);
+    return { ownerId: o.id, kycStatus: o.kyc_status };
   }
 
   /** Channels in review, blocked, or with open reports. */

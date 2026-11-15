@@ -4,7 +4,7 @@ import {
   confirmPayment, createDb, createPayment, createPlan, getWallet, migrate, registerChannel, upsertOwner, upsertSubscriber,
   type Sql, acceptRules } from "@obuna/core";
 import { MockProvider } from "@obuna/atmos";
-import { runJobs } from "../src/jobs.js";
+import { isBlockedError, runJobs } from "../src/jobs.js";
 
 const url = process.env.TEST_DATABASE_URL;
 const d = url ? describe : describe.skip;
@@ -68,5 +68,33 @@ d("scheduler", () => {
     const [sub] = await sql`SELECT auto_renew FROM subscriptions WHERE subscriber_id = ${s.id}`;
     expect(sub!.auto_renew).toBe(false);
     expect(api.sendMessage).toHaveBeenCalledWith(30, expect.stringContaining("narx"), expect.anything());
+  });
+
+  it("marks users who blocked the bot and stops reminding them", async () => {
+    const owner = await upsertOwner(sql, { id: 3, first_name: "Owner3" });
+    const ch = await registerChannel(sql, owner.id, { id: -300, title: "Kanal 3" });
+    await acceptRules(sql, owner.id, ch.id);
+    const plan = await createPlan(sql, owner.id, ch.id, { title: "1 oy", duration_days: 30, price: 1_000_000 });
+    const s = await upsertSubscriber(sql, { id: 40, first_name: "Gone", language_code: "uz" });
+    expect(s.language_code).toBe("uz");
+    const { payment } = await createPayment(sql, { subscriberId: s.id, planId: plan.id, provider: "mock", autoRenew: false });
+    await confirmPayment(sql, payment.id, ledger, {});
+    await sql`UPDATE subscriptions SET expires_at = now() + interval '2 days' WHERE subscriber_id = ${s.id}`;
+    const blocked = Object.assign(new Error("Forbidden"), { error_code: 403, description: "Forbidden: bot was blocked by the user" });
+    expect(isBlockedError(blocked)).toBe(true);
+    expect(isBlockedError({ error_code: 403, description: "Forbidden: not enough rights" })).toBe(false);
+    const send = vi.fn(async () => { throw blocked; });
+    const r = await runJobs({ sql, api: { ...api, sendMessage: send } as unknown as Api, provider: new MockProvider(), ledger, webAppUrl: "https://app" });
+    expect(r.reminded).toBe(1);
+    const [row] = await sql`SELECT bot_blocked FROM subscribers WHERE id = ${s.id}`;
+    expect(row!.bot_blocked).toBe(true);
+    // The 1-day reminder is skipped for a blocked user.
+    await sql`UPDATE subscriptions SET expires_at = now() + interval '5 hours' WHERE subscriber_id = ${s.id}`;
+    const r2 = await runJobs({ sql, api: { ...api, sendMessage: send } as unknown as Api, provider: new MockProvider(), ledger, webAppUrl: "https://app" });
+    expect(r2.reminded).toBe(0);
+    // Coming back to the bot clears the flag.
+    await upsertSubscriber(sql, { id: 40, first_name: "Gone" });
+    const [again] = await sql`SELECT bot_blocked, language_code FROM subscribers WHERE id = ${s.id}`;
+    expect(again).toMatchObject({ bot_blocked: false, language_code: "uz" });
   });
 });
